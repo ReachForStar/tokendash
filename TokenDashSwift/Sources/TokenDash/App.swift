@@ -91,6 +91,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.checkDaemonHealth()
         }
 
+        // Power awareness: suspend the refresh state machine on sleep / low power
+        // so the menu bar stops polling entirely while the system is idle.
+        let ws = NSWorkspace.shared.notificationCenter
+        ws.addObserver(self, selector: #selector(systemWillSleep),
+                       name: NSWorkspace.willSleepNotification, object: nil)
+        ws.addObserver(self, selector: #selector(systemDidWake),
+                       name: NSWorkspace.didWakeNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(powerStateChanged),
+            name: Notification.Name.NSProcessInfoPowerStateDidChange, object: nil)
+
         // Let AppKit finish installing the status item and panel before any
         // startup service work begins, so the very first click is responsive.
         DispatchQueue.main.async {
@@ -149,6 +160,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Power state → refresh mode
+
+    @objc private func systemWillSleep() {
+        setBadgeMode(.suspended)
+    }
+
+    @objc private func systemDidWake() {
+        // Wake up with popover hidden → dormant. (If the popover was open when
+        // sleeping, the user will click again and togglePopover flips to active.)
+        setBadgeMode(.dormant)
+    }
+
+    @objc private func powerStateChanged() {
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            setBadgeMode(.suspended)
+        }
+        // Exiting low-power mode does not auto-resume; the next popover toggle
+        // or sleep/wake cycle restarts the appropriate mode.
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         stopOutsideClickMonitor()
         badgePollTimer?.invalidate()
@@ -158,6 +189,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Panel toggle
+
+    /// Bridges a nonisolated AppKit/selector context to the @MainActor
+    /// BadgeUpdater.setMode. AppKit invokes togglePopover/hidePopover and the
+    /// power-state @objc callbacks off the actor, so hop onto MainActor here.
+    private func setBadgeMode(_ mode: BadgeUpdater.RefreshMode) {
+        Task { @MainActor in badgeUpdater?.setMode(mode) }
+    }
 
     @objc private func togglePopover() {
         if panel.isVisible {
@@ -186,12 +224,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             panel.orderFrontRegardless()
             panel.makeKey()
             startOutsideClickMonitor()
+            setBadgeMode(.active)
         }
     }
 
     private func hidePopover() {
         panel.orderOut(nil)
         stopOutsideClickMonitor()
+        setBadgeMode(.dormant)
     }
 
     private func startOutsideClickMonitor() {

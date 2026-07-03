@@ -15,5 +15,10 @@ let package = Package(
             ],
             path: "Sources/TokenDash"
         ),
+        .testTarget(
+            name: "TokenDashTests",
+            dependencies: ["TokenDash"],
+            path: "Tests/TokenDashTests"
+        ),
     ]
 )

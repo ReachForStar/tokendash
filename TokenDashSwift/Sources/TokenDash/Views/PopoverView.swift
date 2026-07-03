@@ -37,7 +37,7 @@ struct PopoverView: View {
             if state.isLoading {
                 loadingContent
             } else {
-                HourlyChartView(data: state.hourlyData)
+                HourlyChartView(data: state.hourlyData, pulseSamples: state.pulseSamples)
                     .sectionDivider()
 
                 UsageSection(summary: state.todaySummary, models: state.models)

@@ -22,6 +22,7 @@ import Combine
     var cacheRate: Double = 0
     var todaySummary: TodaySummary?
     var hourlyData: [HourBucket] = []
+    var pulseSamples: [TokenPulseSample] = TokenPulseHistoryStore.shared.load()
     var projects: [ProjectRow] = []
     var models: [ModelRow] = []
     var trend: [TrendPoint] = []

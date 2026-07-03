@@ -1,7 +1,17 @@
 import Foundation
 
+/// Test seam — BadgeUpdater depends on this protocol so unit tests can inject
+/// a counting mock instead of the real HTTP client.
+protocol APIClientProtocol {
+    func getAgents() async throws -> AgentsResponse
+    func getDaily(agent: String, refresh: Bool) async throws -> DailyResponse
+    func getBlocks(agent: String, refresh: Bool) async throws -> BlocksResponse
+    func getProjects(agent: String, refresh: Bool) async throws -> ProjectsResponse
+    func getQuota(refresh: Bool) async throws -> QuotaResponse
+}
+
 /// Lightweight HTTP client for the local TokenDash API.
-actor APIClient {
+actor APIClient: APIClientProtocol {
     static let expectedPackageName = "@zhangferry-dev/tokendash"
     private let baseURL: String
 
