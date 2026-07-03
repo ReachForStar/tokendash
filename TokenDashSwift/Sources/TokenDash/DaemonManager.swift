@@ -198,6 +198,15 @@ import Foundation
         }
     }
 
+    /// Network probe — true if the daemon on the current port responds with
+    /// our package identity. Used by the health monitor; more reliable than
+    /// `isAlive()` (pid-file) across reattach, where self.process is nil and
+    /// pid-file state can lag the actual listener.
+    func isAliveViaProbe() async -> Bool {
+        guard let port = port else { return false }
+        return await probeDaemon(port: port) == .compatible
+    }
+
     private func cleanupIncompatibleDaemon(pid: pid_t?) async {
         if let pid, isProcessAlive(pid: pid), isTokenDashDaemonProcess(pid: pid) {
             await stopDaemonProcessAsync(pid: pid)

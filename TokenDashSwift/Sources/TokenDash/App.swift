@@ -144,11 +144,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// hot-switches the BadgeUpdater to the new port so the popover recovers
     /// without an app restart.
     func checkDaemonHealth() {
-        guard let manager = daemonManager else { return }
-        if manager.isAlive() { return }
-        NSLog("[TokenDash] Health check: daemon not alive — restarting")
-        state.isDaemonReady = false
+        guard daemonManager != nil else { return }
         Task { @MainActor in
+            guard let manager = daemonManager else { return }
+            // Port probe is authoritative across reattach (where DaemonManager
+            // has no Process handle and pid-file state may lag). Avoids spurious
+            // restarts that spawn duplicate daemons.
+            if await manager.isAliveViaProbe() { return }
+            NSLog("[TokenDash] Health check: daemon not responding — restarting")
+            state.isDaemonReady = false
             do {
                 let port = try await manager.startDaemon()
                 badgeUpdater?.updatePort(port)
