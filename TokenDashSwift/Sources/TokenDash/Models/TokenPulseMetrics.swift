@@ -69,3 +69,28 @@ struct TokenPulseMetrics {
         self.isStageActive = isStageActive
     }
 }
+
+/// Trailing-window smoothed token rates, one per sample (sorted ascending by
+/// timestamp, same length as the input). Each output point = Σ token deltas
+/// over samples in `[tᵢ − window, tᵢ]` ÷ `window`.
+///
+/// Using a delta-sum (rather than averaging the per-sample instantaneous rates)
+/// is the key to killing the 0↔spike jitter on the pulse chart: a response that
+/// lands in one 10s bucket is correctly attributed across the whole trailing
+/// window instead of showing up as a single needle. `window` is the divisor
+/// (clamped to ≥ 5s), so a partial window at the chart's leading edge reads as
+/// "past N seconds average including idle time", not an amplified instantaneous.
+func pulseSmoothedRates(
+    for samples: [TokenPulseSample],
+    window: TimeInterval
+) -> [(input: Double, output: Double)] {
+    let ordered = samples.sorted { $0.timestamp < $1.timestamp }
+    let safeWindow = max(5, window)
+    return ordered.map { sample in
+        let windowStart = sample.timestamp.addingTimeInterval(-safeWindow)
+        let inWindow = ordered.filter { $0.timestamp >= windowStart && $0.timestamp <= sample.timestamp }
+        let inputSum = inWindow.reduce(0.0) { $0 + Double(max(0, $1.inputDelta)) }
+        let outputSum = inWindow.reduce(0.0) { $0 + Double(max(0, $1.outputDelta)) }
+        return (input: inputSum / safeWindow, output: outputSum / safeWindow)
+    }
+}

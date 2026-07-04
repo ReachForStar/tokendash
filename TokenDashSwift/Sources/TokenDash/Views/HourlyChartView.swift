@@ -1,6 +1,10 @@
 import SwiftUI
 import Charts
 
+/// Trailing window for the pulse chart's smoothed rate curve (seconds). Each
+/// point on the curve = Σ token deltas in the past `pulseSmoothWindow` ÷ window.
+private let pulseSmoothWindow: TimeInterval = 30
+
 struct HourlyChartView: View {
     let data: [HourBucket]
     let pulseSamples: [TokenPulseSample]
@@ -353,7 +357,9 @@ private struct TokenPulseChartView: View {
                 if let hoverLocation {
                     let layout = PulseLayout(samples: samples, size: geo.size)
                     if let sample = layout.sample(atX: hoverLocation.x) {
-                        pulseTooltip(for: sample)
+                        let rate = layout.smoothedRate(for: sample)
+                            ?? (input: sample.inputTokensPerSecond, output: sample.outputTokensPerSecond)
+                        pulseTooltip(timestamp: sample.timestamp, input: rate.input, output: rate.output)
                             .position(
                                 x: min(max(hoverLocation.x, 64), max(64, geo.size.width - 64)),
                                 y: 16
@@ -387,15 +393,15 @@ private struct TokenPulseChartView: View {
         return formatter.string(from: date)
     }
 
-    private func pulseTooltip(for sample: TokenPulseSample) -> some View {
+    private func pulseTooltip(timestamp: Date, input: Double, output: Double) -> some View {
         VStack(spacing: 1) {
-            Text(pulseTimeString(sample.timestamp))
+            Text(pulseTimeString(timestamp))
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
-                Text("↑ \(formatRate(sample.inputTokensPerSecond))/s")
+                Text("↑ \(formatRate(input))/s")
                     .foregroundStyle(Color.accentGreen)
-                Text("↓ \(formatRate(sample.outputTokensPerSecond))/s")
+                Text("↓ \(formatRate(output))/s")
                     .foregroundStyle(Color.blue)
             }
             .font(.system(size: 10, weight: .semibold))
@@ -522,12 +528,14 @@ private struct PulseLayout {
     let baselineY: CGFloat
     let sharedPeakRate: Double
     let samples: [TokenPulseSample]
+    let rates: [(input: Double, output: Double)]
     let inputPoints: [CGPoint]
     let outputPoints: [CGPoint]
     let windowStart: Date
 
     init(samples: [TokenPulseSample], size: CGSize) {
-        self.samples = samples
+        let sorted = samples.sorted { $0.timestamp < $1.timestamp }
+        self.samples = sorted
         self.size = size
         // Input rises above the baseline, output drops below it — two mirrored
         // translucent bands sharing one midline.
@@ -535,26 +543,39 @@ private struct PulseLayout {
         baselineY = topPadding + chartHeight * 0.52
         let upperHeight = chartHeight * 0.44
         let lowerHeight = chartHeight * 0.40
-        let now = samples.last?.timestamp ?? Date()
+        let now = sorted.last?.timestamp ?? Date()
         windowStart = now.addingTimeInterval(-30 * 60)
+
+        // Smoothed trailing-window rates — kills the 0↔spike jitter from batched
+        // JSONL writes by spreading each response's tokens across the window.
+        let rates = pulseSmoothedRates(for: sorted, window: pulseSmoothWindow)
+        self.rates = rates
         sharedPeakRate = max(
-            samples.map(\.inputTokensPerSecond).max() ?? 0,
-            samples.map(\.outputTokensPerSecond).max() ?? 0,
+            rates.map(\.input).max() ?? 0,
+            rates.map(\.output).max() ?? 0,
             1
         )
 
         var inputs: [CGPoint] = []
         var outputs: [CGPoint] = []
-        for sample in samples {
+        for (index, sample) in sorted.enumerated() {
             let elapsed = sample.timestamp.timeIntervalSince(windowStart)
             let x = size.width * CGFloat(max(0, min(1, elapsed / (30 * 60))))
-            let normalizedInput = log1p(sample.inputTokensPerSecond) / log1p(sharedPeakRate)
-            let normalizedOutput = log1p(sample.outputTokensPerSecond) / log1p(sharedPeakRate)
+            let rate = rates[index]
+            let normalizedInput = log1p(rate.input) / log1p(sharedPeakRate)
+            let normalizedOutput = log1p(rate.output) / log1p(sharedPeakRate)
             inputs.append(CGPoint(x: x, y: baselineY - upperHeight * CGFloat(normalizedInput)))
             outputs.append(CGPoint(x: x, y: baselineY + lowerHeight * CGFloat(normalizedOutput)))
         }
         inputPoints = inputs
         outputPoints = outputs
+    }
+
+    /// Smoothed (input, output) rate for a given sample, for the hover tooltip.
+    func smoothedRate(for sample: TokenPulseSample) -> (input: Double, output: Double)? {
+        guard let index = samples.firstIndex(where: { $0.timestamp == sample.timestamp }),
+              index < rates.count else { return nil }
+        return rates[index]
     }
 
     /// Map a horizontal position (0…width) to the nearest sample in time.
