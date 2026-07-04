@@ -28,12 +28,15 @@ final class BadgeUpdaterModeTests: XCTestCase {
         let updater = BadgeUpdater(state: state, client: mock)
 
         await updater.performFullUpdate(forceRefresh: true, forceQuota: false)
+        // Detail state paints synchronously; quota refreshes async — give the
+        // detached quota task a moment to run before asserting on it.
+        try await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
 
         let counts = await mock.snapshot()
         XCTAssertGreaterThan(counts.daily, 0)
         XCTAssertGreaterThan(counts.blocks, 0)
         XCTAssertGreaterThan(counts.projects, 0)
-        XCTAssertGreaterThan(counts.quota, 0, "active 详情刷新要拉 quota")
+        XCTAssertGreaterThan(counts.quota, 0, "active 详情刷新最终要拉 quota（异步）")
         let lastQuotaRefresh = await mock.lastQuotaRefresh
         XCTAssertEqual(lastQuotaRefresh, false, "非手动刷新时 quota 必须走缓存")
     }

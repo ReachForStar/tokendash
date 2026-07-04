@@ -45,6 +45,11 @@ import AppKit
 
     func start(port: Int) {
         applyPort(port)
+        // Prime detail state once on launch so the first popover open isn't
+        // empty — dormant mode afterwards only refreshes the badge. All
+        // cache-served (warm-up has filled daily/blocks/projects), and quota
+        // runs async so it never blocks this initial paint.
+        Task { await self.performFullUpdate(forceRefresh: false, forceQuota: false) }
         setMode(.dormant)   // app launches with popover hidden
     }
 
@@ -74,7 +79,10 @@ import AppKit
             scheduleDormant()
             Task { await self.performBadgeUpdate() }   // immediate refresh on entry
         case .active:
-            Task { await self.performFullUpdate(forceRefresh: true, forceQuota: false) }
+            // Cache-served open (warm-up pre-filled daily/blocks/projects) so the
+            // popover paints instantly. The 60s active detail timer + manual
+            // refresh keep it fresh; we don't bypass the cache on every open.
+            Task { await self.performFullUpdate(forceRefresh: false, forceQuota: false) }
             schedulePulse()
             scheduleActiveFull()
         case .suspended:
@@ -215,15 +223,8 @@ import AppKit
             let modelRows = computeModels(daily: dailyResults, today: today)
             let trendPoints = computeTrend(daily: dailyResults)
 
-            // Coding Plan quotas — cache-served unless this is a manual refresh.
-            var quotaSnapshots = self.state.quotas
-            do {
-                let quotaResp = try await api.getQuota(refresh: forceQuota)
-                quotaSnapshots = self.retainUsableQuotas(quotaResp.providers, previous: self.state.quotas)
-            } catch {
-                NSLog("[TokenDash] Quota fetch failed (non-fatal): \(error)")
-            }
-
+            // Detail state (cache-served, instant) — painted BEFORE quota so the
+            // popover isn't blocked on upstream quota calls (which can take 1-2s).
             self.state.badgeImage = badgeImage
             self.state.tooltipText = String(
                 format: "TokenDash - %@ tokens today ($%.2f) | cache: %.1f%%",
@@ -236,12 +237,33 @@ import AppKit
             self.state.projects = projectRows
             self.state.models = modelRows
             self.state.trend = trendPoints
-            self.state.quotas = quotaSnapshots
 
-            NotificationService.shared.evaluate(quotas: quotaSnapshots)
+            // Quota refreshes async (upstream calls can take 1-2s); don't block
+            // the detail paint. A manual refresh (forceQuota) still awaits so the
+            // user sees the result of their explicit refresh.
+            if forceQuota {
+                await self.refreshQuota(force: true)
+            } else {
+                Task { await self.refreshQuota(force: false) }
+            }
         } catch {
             NSLog("[TokenDash] full update error: \(error.localizedDescription)")
             self.state.errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Refresh Coding Plan quotas independently so it never blocks the detail
+    /// paint (upstream provider calls can take 1-2s). `force` bypasses the 60s
+    /// cache — used by the manual refresh button.
+    private func refreshQuota(force: Bool) async {
+        guard let api = apiClient else { return }
+        do {
+            let quotaResp = try await api.getQuota(refresh: force)
+            let merged = retainUsableQuotas(quotaResp.providers, previous: state.quotas)
+            state.quotas = merged
+            NotificationService.shared.evaluate(quotas: merged)
+        } catch {
+            NSLog("[TokenDash] Quota fetch failed (non-fatal): \(error)")
         }
     }
 
