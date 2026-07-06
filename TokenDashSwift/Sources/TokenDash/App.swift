@@ -91,6 +91,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.checkDaemonHealth()
         }
 
+        // Power awareness: suspend the refresh state machine on sleep / low power
+        // so the menu bar stops polling entirely while the system is idle.
+        let ws = NSWorkspace.shared.notificationCenter
+        ws.addObserver(self, selector: #selector(systemWillSleep),
+                       name: NSWorkspace.willSleepNotification, object: nil)
+        ws.addObserver(self, selector: #selector(systemDidWake),
+                       name: NSWorkspace.didWakeNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(powerStateChanged),
+            name: Notification.Name.NSProcessInfoPowerStateDidChange, object: nil)
+
         // Let AppKit finish installing the status item and panel before any
         // startup service work begins, so the very first click is responsive.
         DispatchQueue.main.async {
@@ -133,11 +144,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// hot-switches the BadgeUpdater to the new port so the popover recovers
     /// without an app restart.
     func checkDaemonHealth() {
-        guard let manager = daemonManager else { return }
-        if manager.isAlive() { return }
-        NSLog("[TokenDash] Health check: daemon not alive — restarting")
-        state.isDaemonReady = false
+        guard daemonManager != nil else { return }
         Task { @MainActor in
+            guard let manager = daemonManager else { return }
+            // Trust a live process handle / pid-file FIRST. A port-probe timeout
+            // during daemon warm-up (JSONL parsing blocks the Node event loop) is
+            // NOT a death signal — probing in that window spawned duplicate
+            // daemons on the health-check cadence (8 ghosts across 3456-3463),
+            // each one switching the app onto a still-warming daemon with empty
+            // caches (the empty-popover bug). Only probe + restart when the
+            // process is actually gone.
+            if manager.isAlive() { return }
+            if await manager.isAliveViaProbe() { return }
+            NSLog("[TokenDash] Health check: daemon not responding — restarting")
+            state.isDaemonReady = false
             do {
                 let port = try await manager.startDaemon()
                 badgeUpdater?.updatePort(port)
@@ -149,6 +169,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Power state → refresh mode
+
+    @objc private func systemWillSleep() {
+        setBadgeMode(.suspended)
+    }
+
+    @objc private func systemDidWake() {
+        // Wake up with popover hidden → dormant. (If the popover was open when
+        // sleeping, the user will click again and togglePopover flips to active.)
+        setBadgeMode(.dormant)
+    }
+
+    @objc private func powerStateChanged() {
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            setBadgeMode(.suspended)
+        }
+        // Exiting low-power mode does not auto-resume; the next popover toggle
+        // or sleep/wake cycle restarts the appropriate mode.
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         stopOutsideClickMonitor()
         badgePollTimer?.invalidate()
@@ -158,6 +198,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Panel toggle
+
+    /// Bridges a nonisolated AppKit/selector context to the @MainActor
+    /// BadgeUpdater.setMode. AppKit invokes togglePopover/hidePopover and the
+    /// power-state @objc callbacks off the actor, so hop onto MainActor here.
+    private func setBadgeMode(_ mode: BadgeUpdater.RefreshMode) {
+        Task { @MainActor in badgeUpdater?.setMode(mode) }
+    }
 
     @objc private func togglePopover() {
         if panel.isVisible {
@@ -186,12 +233,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             panel.orderFrontRegardless()
             panel.makeKey()
             startOutsideClickMonitor()
+            setBadgeMode(.active)
         }
     }
 
     private func hidePopover() {
         panel.orderOut(nil)
         stopOutsideClickMonitor()
+        setBadgeMode(.dormant)
     }
 
     private func startOutsideClickMonitor() {

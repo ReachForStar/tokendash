@@ -133,7 +133,47 @@ async function main() {
   writePidFile();
   writePortFile(port);
 
-  // Warm up cache: pre-parse JSONL for all agents so first Swift fetch is fast
+  // Graceful shutdown — defined early so the orphan watcher below can call it.
+  const shutdown = () => {
+    cleanupFiles();
+    server.close(() => process.exit(0));
+    // Force exit after 5s if server.close hangs
+    setTimeout(() => process.exit(0), 5000);
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  process.on('uncaughtException', (err) => {
+    console.error('[tokendash-daemon] uncaught:', err);
+    shutdown();
+  });
+
+  // Orphan prevention: the Swift app owns this daemon's lifecycle. Arm the
+  // watcher BEFORE warm-up so a slow first JSONL parse can't leave a window
+  // where the daemon outlives a crashing app. If the app dies without SIGTERM
+  // (crash, SIGKILL, `pkill -x TokenDash`, system-shutdown race), this process
+  // would be reparented to launchd and keep holding the port — forcing future
+  // launches onto fallback ports and accumulating zombies. Detect parent death
+  // (reparent to pid 1, or original parent pid no longer alive) and exit.
+  const parentPid = process.ppid;
+  if (parentPid && parentPid > 1) {
+    const orphanTimer = setInterval(() => {
+      let parentGone = false;
+      if (process.ppid === 1) parentGone = true;
+      else {
+        try { process.kill(parentPid, 0); }
+        catch { parentGone = true; }
+      }
+      if (parentGone) {
+        clearInterval(orphanTimer);
+        console.error('[tokendash-daemon] parent app gone, exiting to avoid orphan');
+        shutdown();
+      }
+    }, 5000);
+  }
+
+  // Warm up cache: pre-parse JSONL for all agents so first Swift fetch is fast.
+  // Best-effort — armed AFTER the watchers above so a slow parse can't delay them.
   try {
     const agentsRes = await new Promise<any>((resolve, reject) => {
       http.get(`http://${TOKEN_DASH_HOST}:${port}/api/agents`, (res) => {
@@ -151,21 +191,6 @@ async function main() {
   } catch (_) {
     // Warm-up is best-effort; don't block startup
   }
-
-  // Graceful shutdown
-  const shutdown = () => {
-    cleanupFiles();
-    server.close(() => process.exit(0));
-    // Force exit after 5s if server.close hangs
-    setTimeout(() => process.exit(0), 5000);
-  };
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
-  process.on('uncaughtException', (err) => {
-    console.error('[tokendash-daemon] uncaught:', err);
-    shutdown();
-  });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

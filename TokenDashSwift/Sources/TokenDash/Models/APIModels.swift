@@ -129,6 +129,63 @@ struct HourBucket: Identifiable {
     var id: Int { hour }
 }
 
+/// One five-second observation used by the 30-minute Token Pulse chart.
+struct TokenPulseSample: Codable, Identifiable {
+    let timestamp: Date
+    let tokenDelta: Int
+    let tokensPerSecond: Double
+    let inputDelta: Int
+    let outputDelta: Int
+    let inputTokensPerSecond: Double
+    let outputTokensPerSecond: Double
+    var id: Date { timestamp }
+
+    init(
+        timestamp: Date,
+        tokenDelta: Int,
+        tokensPerSecond: Double,
+        inputDelta: Int = 0,
+        outputDelta: Int = 0,
+        inputTokensPerSecond: Double = 0,
+        outputTokensPerSecond: Double = 0
+    ) {
+        self.timestamp = timestamp
+        self.tokenDelta = tokenDelta
+        self.tokensPerSecond = tokensPerSecond
+        self.inputDelta = inputDelta
+        self.outputDelta = outputDelta
+        self.inputTokensPerSecond = inputTokensPerSecond
+        self.outputTokensPerSecond = outputTokensPerSecond
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case timestamp, tokenDelta, tokensPerSecond
+        case inputDelta, outputDelta, inputTokensPerSecond, outputTokensPerSecond
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        timestamp = try values.decode(Date.self, forKey: .timestamp)
+        tokenDelta = try values.decode(Int.self, forKey: .tokenDelta)
+        tokensPerSecond = try values.decode(Double.self, forKey: .tokensPerSecond)
+        inputDelta = try values.decodeIfPresent(Int.self, forKey: .inputDelta) ?? 0
+        outputDelta = try values.decodeIfPresent(Int.self, forKey: .outputDelta) ?? 0
+        inputTokensPerSecond = try values.decodeIfPresent(Double.self, forKey: .inputTokensPerSecond) ?? 0
+        outputTokensPerSecond = try values.decodeIfPresent(Double.self, forKey: .outputTokensPerSecond) ?? 0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(timestamp, forKey: .timestamp)
+        try values.encode(tokenDelta, forKey: .tokenDelta)
+        try values.encode(tokensPerSecond, forKey: .tokensPerSecond)
+        try values.encode(inputDelta, forKey: .inputDelta)
+        try values.encode(outputDelta, forKey: .outputDelta)
+        try values.encode(inputTokensPerSecond, forKey: .inputTokensPerSecond)
+        try values.encode(outputTokensPerSecond, forKey: .outputTokensPerSecond)
+    }
+}
+
 struct ProjectRow: Identifiable {
     let name: String
     let fullPath: String

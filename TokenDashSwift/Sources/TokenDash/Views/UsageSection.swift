@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Usage breakdown with a By Model / By Type toggle.
+/// Usage breakdown with a Model / Type toggle.
 ///
-/// By Model shows per-model token share (Sonnet/Opus/Haiku/…), a dimension the
-/// old single Input/Output/Cached breakdown lacked. By Type keeps that classic
+/// Model shows per-model token share (Sonnet/Opus/Haiku/…), a dimension the
+/// old single Input/Output/Cached breakdown lacked. Type keeps that classic
 /// split. Both share one compact bar-list renderer.
 struct UsageSection: View {
     let summary: TodaySummary?
@@ -12,8 +12,8 @@ struct UsageSection: View {
     @Namespace private var selectorAnimation
 
     private enum Mode: String, CaseIterable, Identifiable {
-        case model = "By Model"
-        case type = "By Type"
+        case model = "Model"
+        case type = "Type"
         var id: String { rawValue }
     }
 

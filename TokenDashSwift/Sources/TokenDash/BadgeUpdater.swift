@@ -3,33 +3,67 @@ import AppKit
 
 /// Periodically fetches usage data from the API, updates the menu bar badge image
 /// and refreshes the shared AppState for the popover.
+///
+/// Refresh is driven by a three-state machine (`RefreshMode`) instead of a fixed
+/// high-frequency timer:
+/// - `.dormant`  — popover closed: only the cheap badge update (today total),
+///                 served from the daemon cache. No pulse, no details, no quota.
+/// - `.active`   — popover open: immediate full refresh + 10s pulse (refresh,
+///                 for rate deltas) + 60s cached detail refresh.
+/// - `.suspended`— system sleep / low power: all data timers stopped.
 @MainActor class BadgeUpdater {
     private let state: AppState
-    private var apiClient: APIClient?
-    private var timer: Timer?
-    /// Heartbeat cadence (cheap — just checks the clock). Actual fetch cadence
-    /// follows SettingsStore.refreshInterval.
-    private let tickInterval: TimeInterval = 5.0
-    private var lastUpdate: Date = .distantPast
+    private var apiClient: (any APIClientProtocol)?
 
-    init(state: AppState) {
+    enum RefreshMode { case dormant, active, suspended }
+    private(set) var mode: RefreshMode = .dormant
+
+    // Cadences (seconds). dormant reuses the user's SettingsStore.refreshInterval
+    // (it is cache-served, so even 30s stays cheap). active cadences are fixed.
+    private var dormantInterval: TimeInterval { SettingsStore.shared.refreshInterval.rawValue }
+    private let activePulseInterval: TimeInterval = 10.0
+    private let activeFullInterval: TimeInterval = 60.0
+
+    /// Feature flag matching HourlyChartView.pulseEnabled — hides the 10s pulse
+    /// sampler for the energy-optimization release.
+    private let pulseEnabled = false
+
+    private var dormantTimer: Timer?
+    private var pulseTimer: Timer?
+    private var fullTimer: Timer?
+
+    private var activeAgents: [String] = []
+    private var isPulseSampling = false
+    private var lastPulseObservation: (
+        date: String,
+        timestamp: Date,
+        totalTokens: Int,
+        inputTokens: Int,
+        outputTokens: Int
+    )?
+
+    init(state: AppState, client: (any APIClientProtocol)? = nil) {
         self.state = state
+        self.apiClient = client
     }
 
     func start(port: Int) {
         applyPort(port)
-        ensureTimer()
-        update()
+        // Prime detail state once on launch so the first popover open isn't
+        // empty — dormant mode afterwards only refreshes the badge. All
+        // cache-served (warm-up has filled daily/blocks/projects), and quota
+        // runs async so it never blocks this initial paint.
+        Task { await self.performFullUpdate(forceRefresh: false, forceQuota: false) }
+        setMode(.dormant)   // app launches with popover hidden
     }
 
-    /// Hot-switch to a new daemon port after the daemon has been restarted,
-    /// without tearing down the polling timer. Clears any stale error so the
-    /// popover recovers immediately once the daemon is back.
+    /// Hot-switch to a new daemon port after restart, preserving the current mode.
     func updatePort(_ port: Int) {
+        let resumeMode = mode
         applyPort(port)
-        ensureTimer()
         NSLog("[TokenDash] BadgeUpdater switched to port \(port)")
-        update()
+        mode = .suspended     // force setMode to rebuild timers against new port
+        setMode(resumeMode)
     }
 
     private func applyPort(_ port: Int) {
@@ -39,151 +73,300 @@ import AppKit
         self.state.errorMessage = nil
     }
 
-    private func ensureTimer() {
-        guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: tickInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
+    // MARK: - Mode state machine
+
+    func setMode(_ newMode: RefreshMode) {
+        mode = newMode
+        stopDataTimers()
+        switch newMode {
+        case .dormant:
+            scheduleDormant()
+            Task { await self.performBadgeUpdate() }   // immediate refresh on entry
+        case .active:
+            // Force-refresh on open so the user sees the latest today data, not a
+            // possibly-stale cache. The 60s active detail timer + manual refresh
+            // keep it fresh afterwards; only this open moment bypasses the cache.
+            Task { await self.performFullUpdate(forceRefresh: true, forceQuota: false) }
+            if pulseEnabled {
+                samplePulse()  // prime a pulse baseline immediately, don't wait 10s
+                schedulePulse()
+            }
+            scheduleActiveFull()
+        case .suspended:
+            break   // all data timers stopped; daemon healthCheck (AppDelegate) keeps running
         }
+        NSLog("[TokenDash] BadgeUpdater mode → \(newMode)")
+    }
+
+    private func scheduleDormant() {
+        let t = Timer(timeInterval: dormantInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.performBadgeUpdate() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        dormantTimer = t
+    }
+
+    private func schedulePulse() {
+        let t = Timer(timeInterval: activePulseInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.samplePulse() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        pulseTimer = t
+    }
+
+    private func scheduleActiveFull() {
+        let t = Timer(timeInterval: activeFullInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.performFullUpdate(forceRefresh: false, forceQuota: false) }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        fullTimer = t
+    }
+
+    private func stopDataTimers() {
+        dormantTimer?.invalidate(); dormantTimer = nil
+        pulseTimer?.invalidate(); pulseTimer = nil
+        fullTimer?.invalidate(); fullTimer = nil
     }
 
     func stop() {
-        timer?.invalidate()
-        timer = nil
+        stopDataTimers()
     }
 
-    /// Trigger an immediate refresh (e.g. from the refresh button).
+    /// Manual refresh (refresh button) — force everything, including external quota.
     func refreshNow() {
-        update()
+        Task { await self.performFullUpdate(forceRefresh: true, forceQuota: true) }
     }
 
-    private func tick() {
-        let interval = SettingsStore.shared.refreshInterval
-        if Date().timeIntervalSince(lastUpdate) >= interval.rawValue {
-            update()
+    // MARK: - dormant: cheap badge update (cache-served)
+
+    /// Updates only today's total tokens + cost for the menu bar badge. Served
+    /// from the daemon's 5min cache (refresh:false) so it never triggers JSONL
+    /// re-parsing. Does not touch detail state (hourly/projects/trend/quota).
+    func performBadgeUpdate() async {
+        guard let api = apiClient else { return }
+        do {
+            let agentsResp = try await api.getAgents()
+            let agents = agentsResp.available.isEmpty ? ["claude"] : agentsResp.available
+            self.activeAgents = agents
+
+            let today = todayString()
+            var totalTokens = 0
+            var totalCost = 0.0
+            for agent in agents {
+                if let d = try? await api.getDaily(agent: agent, refresh: false) {
+                    if let entry = d.daily.first(where: { $0.date == today }) {
+                        totalTokens += entry.totalTokens
+                        totalCost += entry.totalCost
+                    }
+                }
+            }
+
+            let tokenStr = formatTokens(totalTokens)
+            self.state.badgeImage = Self.renderBadgeImage(title: tokenStr)
+            self.state.tooltipText = String(
+                format: "TokenDash - %@ tokens today ($%.2f)", tokenStr, totalCost)
+            self.state.isLoading = false
+            self.state.errorMessage = nil
+        } catch {
+            NSLog("[TokenDash] badge update error: \(error.localizedDescription)")
+            self.state.errorMessage = error.localizedDescription
         }
     }
 
-    // MARK: - Update cycle
+    // MARK: - active: full popover refresh
 
-    private func update() {
+    /// Full refresh for the open popover: daily + blocks + projects + quota +
+    /// derived hourly/projects/models/trend. `forceRefresh` bypasses the daemon
+    /// usage cache (used on popover open); `forceQuota` bypasses the 60s quota
+    /// cache (manual refresh only).
+    func performFullUpdate(forceRefresh: Bool, forceQuota: Bool) async {
         guard let api = apiClient else {
-            NSLog("[TokenDash] update() called but apiClient is nil")
+            NSLog("[TokenDash] performFullUpdate called but apiClient is nil")
             return
         }
-        lastUpdate = Date()
-        let port = state.daemonPort
-        // Use a regular Task (inherits MainActor) instead of Task.detached
-        // This ensures state updates trigger SwiftUI observation correctly.
+        do {
+            let agentsResp = try await api.getAgents()
+            let agents = agentsResp.available.isEmpty ? ["claude"] : agentsResp.available
+            self.activeAgents = agents
+
+            var dailyResults: [DailyResponse] = []
+            var blockResults: [BlocksResponse] = []
+            var projectResults: [ProjectsResponse] = []
+
+            for agent in agents {
+                // On open (forceRefresh=true) bypass cache for fresh today data;
+                // the 60s active timer passes forceRefresh=false to reuse the cache.
+                if let d = try? await api.getDaily(agent: agent, refresh: forceRefresh) { dailyResults.append(d) }
+                if let b = try? await api.getBlocks(agent: agent, refresh: forceRefresh) { blockResults.append(b) }
+                if let p = try? await api.getProjects(agent: agent, refresh: forceRefresh) { projectResults.append(p) }
+            }
+
+            let today = todayString()
+            var totalTokens = 0, totalInput = 0, totalOutput = 0, totalCacheRead = 0
+            var totalCost = 0.0
+            for data in dailyResults {
+                guard let entry = data.daily.first(where: { $0.date == today }) else { continue }
+                totalTokens += entry.totalTokens
+                totalInput += entry.inputTokens
+                totalOutput += entry.outputTokens
+                totalCacheRead += entry.cacheReadTokens
+                totalCost += entry.totalCost
+            }
+            let denom = Double(totalInput + totalCacheRead)
+            let cacheRate = denom > 0 ? Double(totalCacheRead) / denom * 100 : 0
+            let tokenStr = formatTokens(totalTokens)
+            let badgeImage = Self.renderBadgeImage(title: tokenStr)
+            let summary = TodaySummary(
+                tokens: totalTokens, cost: totalCost,
+                inputTokens: totalInput, outputTokens: totalOutput,
+                cacheReadTokens: totalCacheRead, cacheRate: cacheRate)
+            if pulseEnabled, dailyResults.count == agents.count {
+                self.recordPulseObservation(
+                    totalTokens: totalTokens, inputTokens: totalInput, outputTokens: totalOutput,
+                    date: today, at: Date())
+            }
+            let computedHourly = computeHourly(blocks: blockResults, today: today)
+            let computedProjects = computeProjects(projects: projectResults, today: today)
+            // Stale-while-revalidate fallback: if this fetch came back without
+            // today data (e.g. daemon warm-up still running), keep the previous
+            // view rather than show an empty chart. The next refresh replaces it.
+            let hourly = (computedHourly.allSatisfy { $0.tokens == 0 }
+                          && state.hourlyData.contains { $0.tokens > 0 })
+                ? state.hourlyData : computedHourly
+            let projectRows = (computedProjects.isEmpty && !state.projects.isEmpty)
+                ? state.projects : computedProjects
+            let modelRows = computeModels(daily: dailyResults, today: today)
+            let trendPoints = computeTrend(daily: dailyResults)
+
+            // Detail state (cache-served, instant) — painted BEFORE quota so the
+            // popover isn't blocked on upstream quota calls (which can take 1-2s).
+            self.state.badgeImage = badgeImage
+            self.state.tooltipText = String(
+                format: "TokenDash - %@ tokens today ($%.2f) | cache: %.1f%%",
+                tokenStr, totalCost, cacheRate)
+            self.state.todaySummary = summary
+            self.state.cacheRate = cacheRate
+            self.state.isLoading = false
+            self.state.errorMessage = nil
+            self.state.hourlyData = hourly
+            self.state.projects = projectRows
+            self.state.models = modelRows
+            self.state.trend = trendPoints
+
+            // Quota refreshes async (upstream calls can take 1-2s); don't block
+            // the detail paint. A manual refresh (forceQuota) still awaits so the
+            // user sees the result of their explicit refresh.
+            if forceQuota {
+                await self.refreshQuota(force: true)
+            } else {
+                Task { await self.refreshQuota(force: false) }
+            }
+        } catch {
+            NSLog("[TokenDash] full update error: \(error.localizedDescription)")
+            self.state.errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Refresh Coding Plan quotas independently so it never blocks the detail
+    /// paint (upstream provider calls can take 1-2s). `force` bypasses the 60s
+    /// cache — used by the manual refresh button.
+    private func refreshQuota(force: Bool) async {
+        guard let api = apiClient else { return }
+        do {
+            let quotaResp = try await api.getQuota(refresh: force)
+            let merged = retainUsableQuotas(quotaResp.providers, previous: state.quotas)
+            state.quotas = merged
+            NotificationService.shared.evaluate(quotas: merged)
+        } catch {
+            NSLog("[TokenDash] Quota fetch failed (non-fatal): \(error)")
+        }
+    }
+
+    // MARK: - Pulse sampling (active only)
+
+    /// Samples today's cumulative token count every activePulseInterval. refresh:true
+    /// because rate deltas need fresh totals (a cache-served value would freeze the
+    /// rate chart at zero). Only scheduled in `.active`.
+    private func samplePulse() {
+        guard let api = apiClient, !isPulseSampling else { return }
+        isPulseSampling = true
         Task { [weak self] in
-            guard let self = self else { return }
+            guard let self else { return }
+            defer { self.isPulseSampling = false }
             do {
-                NSLog("[TokenDash] Fetching agents from port \(port)...")
-                let agentsResp = try await api.getAgents()
-                let agents = agentsResp.available.isEmpty ? ["claude"] : agentsResp.available
-                NSLog("[TokenDash] Agents: \(agents)")
-
-                NSLog("[TokenDash] Fetching daily/blocks/projects for \(agents.count) agents...")
-
-                var dailyResults: [DailyResponse] = []
-                var blockResults: [BlocksResponse] = []
-                var projectResults: [ProjectsResponse] = []
-
-                for agent in agents {
-                    NSLog("[TokenDash] Fetching daily for \(agent)...")
-                    do {
-                        let d = try await api.getDaily(agent: agent, refresh: true)
-                        dailyResults.append(d)
-                        NSLog("[TokenDash] Got daily for \(agent): \(d.daily.count) days")
-                    } catch {
-                        NSLog("[TokenDash] FAILED daily for \(agent): \(error)")
-                    }
-                    do {
-                        let b = try await api.getBlocks(agent: agent, refresh: true)
-                        blockResults.append(b)
-                    } catch {
-                        NSLog("[TokenDash] FAILED blocks for \(agent): \(error)")
-                    }
-                    do {
-                        let p = try await api.getProjects(agent: agent, refresh: true)
-                        projectResults.append(p)
-                    } catch {
-                        NSLog("[TokenDash] FAILED projects for \(agent): \(error)")
-                    }
+                let agents: [String]
+                if self.activeAgents.isEmpty {
+                    let resp = try await api.getAgents()
+                    agents = resp.available.isEmpty ? ["claude"] : resp.available
+                } else {
+                    agents = self.activeAgents
                 }
-                NSLog("[TokenDash] Got \(dailyResults.count) daily, \(blockResults.count) blocks, \(projectResults.count) projects")
-
-                // Compute summary
                 let today = todayString()
-                var totalTokens = 0, totalInput = 0, totalOutput = 0, totalCacheRead = 0
-                var totalCost = 0.0
-
-                for data in dailyResults {
-                    guard let entry = data.daily.first(where: { $0.date == today }) else { continue }
-                    totalTokens += entry.totalTokens
-                    totalInput += entry.inputTokens
-                    totalOutput += entry.outputTokens
-                    totalCacheRead += entry.cacheReadTokens
-                    totalCost += entry.totalCost
+                var totalTokens = 0, inputTokens = 0, outputTokens = 0, ok = 0
+                for agent in agents {
+                    do {
+                        let r = try await api.getDaily(agent: agent, refresh: true)
+                        if let e = r.daily.first(where: { $0.date == today }) {
+                            totalTokens += e.totalTokens
+                            inputTokens += e.inputTokens
+                            outputTokens += e.outputTokens
+                        }
+                        ok += 1
+                    } catch {
+                        NSLog("[TokenDash] Pulse sample failed for \(agent): \(error)")
+                    }
                 }
-
-                let denom = Double(totalInput + totalCacheRead)
-                let cacheRate = denom > 0 ? Double(totalCacheRead) / denom * 100 : 0
-
-                let tokenStr = formatTokens(totalTokens)
-                let tooltip = String(format: "TokenDash - %@ tokens today ($%.2f) | cache: %.1f%%", tokenStr, totalCost, cacheRate)
-                let badgeImage = Self.renderBadgeImage(title: tokenStr)
-                let summary = TodaySummary(
-                    tokens: totalTokens, cost: totalCost,
-                    inputTokens: totalInput, outputTokens: totalOutput,
-                    cacheReadTokens: totalCacheRead, cacheRate: cacheRate
-                )
-                let hourly = computeHourly(blocks: blockResults, today: today)
-                let projectRows = computeProjects(projects: projectResults, today: today)
-                let modelRows = computeModels(daily: dailyResults, today: today)
-                let trendPoints = computeTrend(daily: dailyResults)
-
-                NSLog("[TokenDash] Today: \(tokenStr) tokens, \(formatCost(totalCost)), cache \(formatPercent(cacheRate))")
-
-                // Coding Plan quotas — independent of the daily usage fetch above.
-                // Failures are isolated per-provider by the server, so a missing
-                // credential never breaks the rest of the popover.
-                var quotaSnapshots = self.state.quotas
-                do {
-                    let quotaResp = try await api.getQuota(refresh: true)
-                    quotaSnapshots = self.retainUsableQuotas(quotaResp.providers, previous: self.state.quotas)
-                    NSLog("[TokenDash] Quota: \(quotaSnapshots.count) providers")
-                } catch {
-                    NSLog("[TokenDash] Quota fetch failed (non-fatal): \(error)")
-                }
-
-                // Direct state update — we're on MainActor, observation will fire
-                self.state.badgeImage = badgeImage
-                self.state.tooltipText = tooltip
-                self.state.todaySummary = summary
-                self.state.cacheRate = cacheRate
-                self.state.isLoading = false
-                self.state.errorMessage = nil
-                self.state.hourlyData = hourly
-                self.state.projects = projectRows
-                self.state.models = modelRows
-                self.state.trend = trendPoints
-                self.state.quotas = quotaSnapshots
-
-                // Low-quota notifications (no-op if disabled in settings).
-                NotificationService.shared.evaluate(quotas: quotaSnapshots)
-
+                guard ok == agents.count else { return }
+                self.recordPulseObservation(
+                    totalTokens: totalTokens, inputTokens: inputTokens, outputTokens: outputTokens,
+                    date: today, at: Date())
             } catch {
-                NSLog("[TokenDash] update() error: \(error.localizedDescription)")
-                self.state.errorMessage = error.localizedDescription
+                NSLog("[TokenDash] Pulse sampling failed: \(error)")
             }
         }
+    }
+
+    private func recordPulseObservation(
+        totalTokens: Int, inputTokens: Int, outputTokens: Int, date: String, at timestamp: Date
+    ) {
+        guard let previous = lastPulseObservation, previous.date == date else {
+            lastPulseObservation = (date, timestamp, totalTokens, inputTokens, outputTokens)
+            if let latest = state.pulseSamples.last,
+               !Calendar.current.isDate(latest.timestamp, inSameDayAs: timestamp) {
+                state.pulseSamples = []
+                TokenPulseHistoryStore.shared.save([], now: timestamp)
+            }
+            return
+        }
+        let elapsed = timestamp.timeIntervalSince(previous.timestamp)
+        guard elapsed > 0 else { return }
+        // A lower total means the source was reset or reparsed. Reset the
+        // baseline instead of drawing a false negative spike.
+        let delta = totalTokens >= previous.totalTokens ? totalTokens - previous.totalTokens : 0
+        let inputDelta = inputTokens >= previous.inputTokens ? inputTokens - previous.inputTokens : 0
+        let outputDelta = outputTokens >= previous.outputTokens ? outputTokens - previous.outputTokens : 0
+        let sample = TokenPulseSample(
+            timestamp: timestamp,
+            tokenDelta: delta,
+            tokensPerSecond: Double(delta) / elapsed,
+            inputDelta: inputDelta,
+            outputDelta: outputDelta,
+            inputTokensPerSecond: Double(inputDelta) / elapsed,
+            outputTokensPerSecond: Double(outputDelta) / elapsed
+        )
+        let cutoff = timestamp.addingTimeInterval(-30 * 60)
+        state.pulseSamples = (state.pulseSamples + [sample])
+            .filter { $0.timestamp >= cutoff }
+            .suffix(360)
+            .map { $0 }
+        TokenPulseHistoryStore.shared.save(state.pulseSamples, now: timestamp)
+        lastPulseObservation = (date, timestamp, totalTokens, inputTokens, outputTokens)
     }
 
     private func retainUsableQuotas(_ incoming: [QuotaSnapshot], previous: [QuotaSnapshot]) -> [QuotaSnapshot] {
         guard !incoming.isEmpty else { return previous }
         let previousByProvider = Dictionary(uniqueKeysWithValues: previous.map { ($0.provider, $0) })
         var retainedProviders = Set<String>()
-
         var merged = incoming.compactMap { snapshot -> QuotaSnapshot? in
             retainedProviders.insert(snapshot.provider)
             if snapshot.status.state == "ok", snapshot.freshness != "stale", !snapshot.windows.isEmpty {
@@ -191,7 +374,6 @@ import AppKit
             }
             return previousByProvider[snapshot.provider]
         }
-
         for snapshot in previous where !retainedProviders.contains(snapshot.provider) {
             merged.append(snapshot)
         }
