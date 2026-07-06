@@ -5,6 +5,11 @@ import Charts
 /// point on the curve = Σ token deltas in the past `pulseSmoothWindow` ÷ window.
 private let pulseSmoothWindow: TimeInterval = 30
 
+/// Feature flag: the Pulse tab + its 10s rate-sampling are hidden for the
+/// energy-optimization release (sampling was a top CPU draw). Flip to true to
+/// re-enable both the UI tab and the sampler.
+private let pulseEnabled = false
+
 struct HourlyChartView: View {
     let data: [HourBucket]
     let pulseSamples: [TokenPulseSample]
@@ -43,7 +48,7 @@ struct HourlyChartView: View {
             header
                 .padding(.bottom, 10)
 
-            if selectedMode == .pulse {
+            if pulseEnabled && selectedMode == .pulse {
                 TokenPulseChartView(samples: pulseSamples)
             } else if data.allSatisfy({ $0.tokens == 0 }) {
                 emptyChart
@@ -58,7 +63,7 @@ struct HourlyChartView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            if selectedMode == .pulse {
+            if pulseEnabled && selectedMode == .pulse {
                 HStack(spacing: 5) {
                     Circle()
                         .fill(pulseMetrics.isStageActive ? Color.accentGreen : Color.tertiaryLabel)
@@ -80,7 +85,9 @@ struct HourlyChartView: View {
 
             Spacer()
 
-            modeTabs
+            if pulseEnabled {
+                modeTabs
+            }
         }
     }
 

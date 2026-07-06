@@ -24,6 +24,10 @@ import AppKit
     private let activePulseInterval: TimeInterval = 10.0
     private let activeFullInterval: TimeInterval = 60.0
 
+    /// Feature flag matching HourlyChartView.pulseEnabled — hides the 10s pulse
+    /// sampler for the energy-optimization release.
+    private let pulseEnabled = false
+
     private var dormantTimer: Timer?
     private var pulseTimer: Timer?
     private var fullTimer: Timer?
@@ -83,8 +87,10 @@ import AppKit
             // possibly-stale cache. The 60s active detail timer + manual refresh
             // keep it fresh afterwards; only this open moment bypasses the cache.
             Task { await self.performFullUpdate(forceRefresh: true, forceQuota: false) }
-            samplePulse()  // prime a pulse baseline immediately, don't wait 10s
-            schedulePulse()
+            if pulseEnabled {
+                samplePulse()  // prime a pulse baseline immediately, don't wait 10s
+                schedulePulse()
+            }
             scheduleActiveFull()
         case .suspended:
             break   // all data timers stopped; daemon healthCheck (AppDelegate) keeps running
@@ -214,7 +220,7 @@ import AppKit
                 tokens: totalTokens, cost: totalCost,
                 inputTokens: totalInput, outputTokens: totalOutput,
                 cacheReadTokens: totalCacheRead, cacheRate: cacheRate)
-            if dailyResults.count == agents.count {
+            if pulseEnabled, dailyResults.count == agents.count {
                 self.recordPulseObservation(
                     totalTokens: totalTokens, inputTokens: totalInput, outputTokens: totalOutput,
                     date: today, at: Date())
