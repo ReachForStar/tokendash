@@ -1,5 +1,11 @@
 # Changelog
 
+### v1.8.0
+- **Lower menu-bar energy use** — drive the badge/popover refresh from a dormant/active/suspended state machine instead of a fixed 5s poll, so popover-closed CPU drops to ~0 while keeping full-speed refresh when the popover is open. System sleep and low-power mode pause polling entirely.
+- **No more orphan daemons** — the node daemon now watches its parent app and exits when the app dies (crash, force-quit, `pkill`), and the health check no longer restarts during daemon warm-up. This fixes the duplicate daemons that stacked across ports over time and starved the popover of data.
+- **Popover never opens empty** — prime detail state on launch, paint today/hourly/projects before the slower quota fetch, and fall back to the previous view (stale-while-revalidate) when today data is not ready yet.
+- **Pulse tab hidden (temporary)** — the experimental real-time rate chart and its 10s sampler are gated off while energy impact is being tightened; the code stays in place for a later return.
+
 ### v1.7.5
 - **Reliable menu bar refreshes** — make the native app's refresh interval bypass server-side usage and Coding Plan caches so new data appears on the schedule selected in Settings.
 - **Smoother Coding Plan fallback** — keep showing the last successful quota snapshot when an upstream provider returns a transient error or empty response, avoiding stale/error flashes after data has already loaded.
