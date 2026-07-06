@@ -46,10 +46,14 @@ describe('native app packaging resources', () => {
     const badgeUpdater = readFileSync('TokenDashSwift/Sources/TokenDash/BadgeUpdater.swift', 'utf8');
     expect(apiClient).toContain('"&refresh=1"');
     expect(apiClient).toContain('"/quota\\(refresh ? "?refresh=1" : "")"');
-    expect(badgeUpdater).toContain('api.getDaily(agent: agent, refresh: true)');
-    expect(badgeUpdater).toContain('api.getBlocks(agent: agent, refresh: true)');
-    expect(badgeUpdater).toContain('api.getProjects(agent: agent, refresh: true)');
-    expect(badgeUpdater).toContain('api.getQuota(refresh: true)');
+    // v1.8.0: detail endpoints take a `forceRefresh` flag — true on popover open
+    // (forces past the cache), false on the 60s background timer (cache-served).
+    expect(badgeUpdater).toContain('api.getDaily(agent: agent, refresh: forceRefresh)');
+    expect(badgeUpdater).toContain('api.getBlocks(agent: agent, refresh: forceRefresh)');
+    expect(badgeUpdater).toContain('api.getProjects(agent: agent, refresh: forceRefresh)');
+    expect(badgeUpdater).toContain('api.getQuota(refresh: force)');
+    // popover open must still force-refresh (the v1.7.5 guarantee, now via flag)
+    expect(badgeUpdater).toContain('performFullUpdate(forceRefresh: true, forceQuota: false)');
     expect(badgeUpdater).toContain('retainUsableQuotas');
     expect(badgeUpdater).toContain('snapshot.freshness != "stale"');
   });
