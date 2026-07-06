@@ -147,9 +147,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard daemonManager != nil else { return }
         Task { @MainActor in
             guard let manager = daemonManager else { return }
-            // Port probe is authoritative across reattach (where DaemonManager
-            // has no Process handle and pid-file state may lag). Avoids spurious
-            // restarts that spawn duplicate daemons.
+            // Trust a live process handle / pid-file FIRST. A port-probe timeout
+            // during daemon warm-up (JSONL parsing blocks the Node event loop) is
+            // NOT a death signal — probing in that window spawned duplicate
+            // daemons on the health-check cadence (8 ghosts across 3456-3463),
+            // each one switching the app onto a still-warming daemon with empty
+            // caches (the empty-popover bug). Only probe + restart when the
+            // process is actually gone.
+            if manager.isAlive() { return }
             if await manager.isAliveViaProbe() { return }
             NSLog("[TokenDash] Health check: daemon not responding — restarting")
             state.isDaemonReady = false

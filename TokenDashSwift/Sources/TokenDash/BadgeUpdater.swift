@@ -79,10 +79,11 @@ import AppKit
             scheduleDormant()
             Task { await self.performBadgeUpdate() }   // immediate refresh on entry
         case .active:
-            // Cache-served open (warm-up pre-filled daily/blocks/projects) so the
-            // popover paints instantly. The 60s active detail timer + manual
-            // refresh keep it fresh; we don't bypass the cache on every open.
-            Task { await self.performFullUpdate(forceRefresh: false, forceQuota: false) }
+            // Force-refresh on open so the user sees the latest today data, not a
+            // possibly-stale cache. The 60s active detail timer + manual refresh
+            // keep it fresh afterwards; only this open moment bypasses the cache.
+            Task { await self.performFullUpdate(forceRefresh: true, forceQuota: false) }
+            samplePulse()  // prime a pulse baseline immediately, don't wait 10s
             schedulePulse()
             scheduleActiveFull()
         case .suspended:
@@ -187,11 +188,11 @@ import AppKit
             var projectResults: [ProjectsResponse] = []
 
             for agent in agents {
+                // On open (forceRefresh=true) bypass cache for fresh today data;
+                // the 60s active timer passes forceRefresh=false to reuse the cache.
                 if let d = try? await api.getDaily(agent: agent, refresh: forceRefresh) { dailyResults.append(d) }
-                // Detail endpoints always cache-served (refresh:false) — daemon reuses its
-                // 5min cache, so the 60s active cadence does NOT re-parse JSONL.
-                if let b = try? await api.getBlocks(agent: agent, refresh: false) { blockResults.append(b) }
-                if let p = try? await api.getProjects(agent: agent, refresh: false) { projectResults.append(p) }
+                if let b = try? await api.getBlocks(agent: agent, refresh: forceRefresh) { blockResults.append(b) }
+                if let p = try? await api.getProjects(agent: agent, refresh: forceRefresh) { projectResults.append(p) }
             }
 
             let today = todayString()
@@ -218,8 +219,16 @@ import AppKit
                     totalTokens: totalTokens, inputTokens: totalInput, outputTokens: totalOutput,
                     date: today, at: Date())
             }
-            let hourly = computeHourly(blocks: blockResults, today: today)
-            let projectRows = computeProjects(projects: projectResults, today: today)
+            let computedHourly = computeHourly(blocks: blockResults, today: today)
+            let computedProjects = computeProjects(projects: projectResults, today: today)
+            // Stale-while-revalidate fallback: if this fetch came back without
+            // today data (e.g. daemon warm-up still running), keep the previous
+            // view rather than show an empty chart. The next refresh replaces it.
+            let hourly = (computedHourly.allSatisfy { $0.tokens == 0 }
+                          && state.hourlyData.contains { $0.tokens > 0 })
+                ? state.hourlyData : computedHourly
+            let projectRows = (computedProjects.isEmpty && !state.projects.isEmpty)
+                ? state.projects : computedProjects
             let modelRows = computeModels(daily: dailyResults, today: today)
             let trendPoints = computeTrend(daily: dailyResults)
 
