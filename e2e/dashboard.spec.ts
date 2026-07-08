@@ -7,7 +7,7 @@ import { mockApiRoutes } from './fixtures.js';
 
 async function setupPage(page: import('@playwright/test').Page, options?: { agents?: string[] }) {
   await mockApiRoutes(page, { agents: options?.agents });
-  await page.goto('/');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('text=Total tokens', { timeout: 15000 });
 }
 
@@ -25,7 +25,7 @@ test.describe('KPI cards', () => {
   for (const { name, label } of agents) {
     test(`${label}: shows all 5 KPI cards`, async ({ page }) => {
       await mockApiRoutes(page, { agents: [name] });
-      await page.goto('/');
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
 
       // Click the agent button if available
       const btn = page.locator(`button:has-text("${label}")`);
@@ -407,7 +407,7 @@ test.describe('Error handling', () => {
 
   test('handles empty blocks by showing empty heatmap', async ({ page }) => {
     await mockApiRoutes(page, { agents: ['claude'], noBlocks: true });
-    await page.goto('/');
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('text=Total tokens', { timeout: 15000 });
 
     // Heatmap should still render (with all cells gray/zero)

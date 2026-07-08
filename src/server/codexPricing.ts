@@ -19,6 +19,11 @@ interface ModelPricing {
 }
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
+  'gpt-5.5': {
+    inputPer1M: 5.00,
+    cachedInputPer1M: 0.50,
+    outputPer1M: 30.00,
+  },
   'gpt-5.4': {
     inputPer1M: 2.50,
     cachedInputPer1M: 0.25,

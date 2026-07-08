@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, afterEach } from 'vitest';
 import { buildCodexResponsesFromSessions, parseCodexSession, type ParsedSession } from '../../server/codexParser.js';
+import { calculateCost } from '../../server/codexPricing.js';
 import type { DailyEntry, Totals } from '../../shared/types.js';
 
 const tempDirs: string[] = [];
@@ -49,6 +50,13 @@ function tokenCount(timestamp: string, totalTokens: number, outputTokens = 100, 
       type: 'token_count',
       info,
     },
+  };
+}
+
+function turnContext(model: string): unknown {
+  return {
+    type: 'turn_context',
+    payload: { model },
   };
 }
 
@@ -131,6 +139,33 @@ describe('parseCodexSession', () => {
     expect(session?.tokenEvents[0]).toMatchObject({ inputTokens: 100, outputTokens: 50, totalTokens: 150 });
     expect(session?.tokenEvents[1]).toMatchObject({ inputTokens: 100, outputTokens: 25, totalTokens: 125 });
   });
+
+  it('attributes token events to the active model when a session switches models', () => {
+    const filepath = writeSession([
+      {
+        type: 'session_meta',
+        payload: {
+          id: 'session-1',
+          cwd: '/tmp/project',
+          timestamp: '2026-05-18T00:00:00.000Z',
+        },
+      },
+      turnContext('gpt-5.4'),
+      tokenCount('2026-05-18T00:00:01.000Z', 150),
+      turnContext('gpt-5.5'),
+      tokenCount('2026-05-18T00:00:02.000Z', 125, 25),
+    ]);
+
+    const parsed = parseCodexSession(filepath)!;
+    const responses = buildCodexResponsesFromSessions([parsed], { timezone: 'UTC' });
+    const daily = responses.daily.daily[0];
+
+    expect(parsed.model).toBe('gpt-5.4');
+    expect(parsed.tokenEvents.map(ev => ev.model)).toEqual(['gpt-5.4', 'gpt-5.5']);
+    expect(daily.modelsUsed.sort()).toEqual(['gpt-5.4', 'gpt-5.5']);
+    expect(daily.modelBreakdowns.find(b => b.modelName === 'gpt-5.4')).toMatchObject({ inputTokens: 50, outputTokens: 100 });
+    expect(daily.modelBreakdowns.find(b => b.modelName === 'gpt-5.5')).toMatchObject({ inputTokens: 100, outputTokens: 25 });
+  });
 });
 
 describe('buildCodexResponsesFromSessions', () => {
@@ -210,7 +245,7 @@ describe('buildCodexResponsesFromSessions', () => {
 
   it('calculates per-model costs independently instead of splitting evenly', () => {
     const responses = buildCodexResponsesFromSessions([
-      session('s1', '/repo/project-a', 'gpt-5.4', [event('2026-05-18T01:00:00.000Z', 10_000, 500)]),
+      session('s1', '/repo/project-a', 'gpt-5.4', [event('2026-05-18T01:00:00.000Z', 20_000, 1_000)]),
       session('s2', '/repo/project-a', 'gpt-5.5', [event('2026-05-18T02:00:00.000Z', 1_000, 50)]),
     ], { timezone: 'UTC' });
 
@@ -231,5 +266,24 @@ describe('buildCodexResponsesFromSessions', () => {
 
     // Costs should NOT be equal (would happen with even split)
     expect(gpt54.cost).not.toBeCloseTo(gpt55.cost, 5);
+  });
+});
+
+describe('Codex pricing', () => {
+  it('prices gpt-5.5 at twice the gpt-5.4 rate across input, cached input, and output', () => {
+    const tokens = {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 500_000,
+      outputTokens: 1_000_000,
+      reasoningOutputTokens: 0,
+      totalTokens: 2_000_000,
+    };
+
+    const gpt54 = calculateCost(tokens, new Set(['gpt-5.4']));
+    const gpt55 = calculateCost(tokens, new Set(['gpt-5.5']));
+
+    expect(gpt54).toBeCloseTo(16.375, 6);
+    expect(gpt55).toBeCloseTo(32.75, 6);
+    expect(gpt55).toBeCloseTo(gpt54 * 2, 6);
   });
 });

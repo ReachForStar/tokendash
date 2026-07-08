@@ -1,5 +1,9 @@
 # Changelog
 
+### v1.8.1
+- **Correct Codex GPT-5.5 costs** — price `gpt-5.5` separately from `gpt-5.4` so Codex cost estimates match the current 2x higher input, cached input, and output rates used by `ccusage`.
+- **More accurate Codex model attribution** — track model changes within a single Codex session instead of assigning the whole session to the first model, fixing days where `gpt-5.5` usage could appear under `gpt-5.4`.
+
 ### v1.8.0
 - **Lower menu-bar energy use** — drive the badge/popover refresh from a dormant/active/suspended state machine instead of a fixed 5s poll, so popover-closed CPU drops to ~0 while keeping full-speed refresh when the popover is open. System sleep and low-power mode pause polling entirely.
 - **No more orphan daemons** — the node daemon now watches its parent app and exits when the app dies (crash, force-quit, `pkill`), and the health check no longer restarts during daemon warm-up. This fixes the duplicate daemons that stacked across ports over time and starved the popover of data.

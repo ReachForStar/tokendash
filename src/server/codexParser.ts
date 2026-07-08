@@ -33,6 +33,7 @@ const TokenCountPayloadSchema = z.object({
 
 export interface ParsedTokenEvent {
   timestamp: string;
+  model?: string;
   inputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
@@ -158,6 +159,7 @@ export function parseCodexSession(filepath: string): ParsedSession | null {
   let sessionId = '';
   let cwd = '';
   let model = '';
+  let currentModel = '';
   let createdAt = '';
   const tokenEvents: ParsedTokenEvent[] = [];
   let previousTotalUsage: z.infer<typeof TokenUsageSchema> | null = null;
@@ -186,8 +188,9 @@ export function parseCodexSession(filepath: string): ParsedSession | null {
 
     if (type === 'turn_context') {
       const payload = (obj.payload as Record<string, unknown>) || {};
-      if (!model && payload.model) {
-        model = payload.model as string;
+      if (payload.model) {
+        currentModel = payload.model as string;
+        if (!model) model = currentModel;
       }
     }
 
@@ -226,6 +229,7 @@ export function parseCodexSession(filepath: string): ParsedSession | null {
         const event = {
           ...rawEvent,
           timestamp,
+          model: currentModel || model || undefined,
           cachedInputTokens: Math.min(rawEvent.cachedInputTokens, rawEvent.inputTokens),
         };
         const eventKey = [
@@ -398,7 +402,7 @@ function groupSessions(
       if (!grouped.has(key)) {
         grouped.set(key, { acc: emptyAcc(), models: new Map() });
       }
-      addAccToBucket(grouped.get(key)!, ev, session.model);
+      addAccToBucket(grouped.get(key)!, ev, ev.model || session.model);
     }
   }
 
@@ -472,7 +476,7 @@ function buildProjectsResponse(sessions: ParsedSession[], options?: Partial<Aggr
       if (!dailyMap.has(dayKey)) {
         dailyMap.set(dayKey, { acc: emptyAcc(), models: new Map() });
       }
-      addAccToBucket(dailyMap.get(dayKey)!, ev, session.model);
+      addAccToBucket(dailyMap.get(dayKey)!, ev, ev.model || session.model);
     }
   }
 

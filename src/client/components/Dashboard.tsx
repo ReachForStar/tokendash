@@ -21,6 +21,8 @@ const C = ['#4f46e5', '#10b981', '#f59e0b', '#ec4899', '#0ea5e9', '#8b5cf6', '#e
 
 // Model pricing display (USD per 1M tokens) — keep in sync with claudeJsonlParser.ts
 const MODEL_PRICING_DISPLAY: Record<string, { input: string; cache: string; output: string }> = {
+  'gpt-5.5': { input: '5.00', cache: '0.50', output: '30.00' },
+  'gpt-5.4': { input: '2.50', cache: '0.25', output: '15.00' },
   'Opus 4.6': { input: '15.00', cache: '1.50', output: '75.00' },
   'Sonnet 4.6': { input: '3.00', cache: '0.30', output: '15.00' },
   'Sonnet 4.5': { input: '3.00', cache: '0.30', output: '15.00' },
