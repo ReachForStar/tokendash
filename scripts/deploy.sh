@@ -19,6 +19,8 @@ DMG="release/TokenDash-$VERSION-$ARCH.dmg"
 APPCAST="release/appcast.xml"
 REGISTRY="https://registry.npmjs.org"
 REPO="zhangferry/tokendash"
+DEFAULT_SPARKLE_PRIVATE_KEY_FILE="$HOME/.tokendash/eddsa_priv.key"
+DEFAULT_SPARKLE_PUBLIC_KEY_FILE="$HOME/.tokendash/eddsa_pub.key"
 
 fail() {
     echo "Error: $*" >&2
@@ -38,7 +40,14 @@ command -v hdiutil >/dev/null || fail "hdiutil is required"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "package.json version is not valid semver: $VERSION"
 [ "$(node -p "require('./package-lock.json').version")" = "$VERSION" ] \
     || fail "package-lock.json version does not match package.json"
-if [ -z "${SPARKLE_EDDSA_PUB:-}" ] && [ ! -s "$HOME/.tokendash/eddsa_pub.key" ]; then
+if [ -z "${SPARKLE_PRIVATE_KEY_FILE:-}" ] && [ -s "$DEFAULT_SPARKLE_PRIVATE_KEY_FILE" ]; then
+    export SPARKLE_PRIVATE_KEY_FILE="$DEFAULT_SPARKLE_PRIVATE_KEY_FILE"
+fi
+if [ -z "${SPARKLE_EDDSA_PUB:-}" ] && [ -s "$DEFAULT_SPARKLE_PUBLIC_KEY_FILE" ]; then
+    export SPARKLE_EDDSA_PUB
+    SPARKLE_EDDSA_PUB="$(cat "$DEFAULT_SPARKLE_PUBLIC_KEY_FILE")"
+fi
+if [ -z "${SPARKLE_EDDSA_PUB:-}" ] && [ ! -s "$DEFAULT_SPARKLE_PUBLIC_KEY_FILE" ]; then
     fail "Sparkle public key missing. Run ./scripts/sparkle-keys.sh or set SPARKLE_EDDSA_PUB."
 fi
 if [ -n "${SPARKLE_PRIVATE_KEY_FILE:-}" ] && [ ! -s "$SPARKLE_PRIVATE_KEY_FILE" ]; then
