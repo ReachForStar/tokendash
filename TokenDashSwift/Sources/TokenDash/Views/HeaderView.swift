@@ -32,8 +32,8 @@ struct HeaderView: View {
                                     .controlSize(.mini)
                             } else {
                                 Image(systemName: "arrow.clockwise")
+                                Text(lastUpdatedLabel)
                             }
-                            Text(lastUpdatedLabel)
                         }
                     }
                     .buttonStyle(.plain)
