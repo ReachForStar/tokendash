@@ -6,7 +6,8 @@ import SwiftUI
 @Observable final class SettingsStore {
     static let shared = SettingsStore()
 
-    /// How often the badge/popover re-fetches usage + quota.
+    /// How often the cheap, cache-served menu bar badge updates. Popover detail
+    /// data refreshes hourly in the background.
     enum RefreshInterval: Double, CaseIterable, Identifiable {
         case thirtySeconds = 30
         case oneMinute = 60

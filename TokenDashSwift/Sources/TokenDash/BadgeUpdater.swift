@@ -6,10 +6,10 @@ import AppKit
 ///
 /// Refresh is driven by a three-state machine (`RefreshMode`) instead of a fixed
 /// high-frequency timer:
-/// - `.dormant`  — popover closed: only the cheap badge update (today total),
-///                 served from the daemon cache. No pulse, no details, no quota.
-/// - `.active`   — popover open: immediate full refresh + 10s pulse (refresh,
-///                 for rate deltas) + 60s cached detail refresh.
+/// - `.dormant`  — popover closed: cheap badge updates plus an hourly full
+///                 refresh of the popover's detail data.
+/// - `.active`   — popover open: a full refresh at most once every 30 minutes;
+///                 subsequent refreshes are manual until the interval elapses.
 /// - `.suspended`— system sleep / low power: all data timers stopped.
 @MainActor class BadgeUpdater {
     private let state: AppState
@@ -18,11 +18,13 @@ import AppKit
     enum RefreshMode { case dormant, active, suspended }
     private(set) var mode: RefreshMode = .dormant
 
-    // Cadences (seconds). dormant reuses the user's SettingsStore.refreshInterval
-    // (it is cache-served, so even 30s stays cheap). active cadences are fixed.
+    // Cadences (seconds). The badge is cache-served and retains its user-selected
+    // cadence; detail data refreshes in the background once an hour.
     private var dormantInterval: TimeInterval { SettingsStore.shared.refreshInterval.rawValue }
     private let activePulseInterval: TimeInterval = 10.0
-    private let activeFullInterval: TimeInterval = 60.0
+    private let backgroundFullInterval: TimeInterval
+    private let popoverRefreshInterval: TimeInterval
+    private let now: () -> Date
 
     /// Feature flag matching HourlyChartView.pulseEnabled — hides the 10s pulse
     /// sampler for the energy-optimization release.
@@ -30,7 +32,8 @@ import AppKit
 
     private var dormantTimer: Timer?
     private var pulseTimer: Timer?
-    private var fullTimer: Timer?
+    private var backgroundFullTimer: Timer?
+    private var lastPopoverRefreshAt: Date?
 
     private var activeAgents: [String] = []
     private var isPulseSampling = false
@@ -42,9 +45,18 @@ import AppKit
         outputTokens: Int
     )?
 
-    init(state: AppState, client: (any APIClientProtocol)? = nil) {
+    init(
+        state: AppState,
+        client: (any APIClientProtocol)? = nil,
+        now: @escaping () -> Date = Date.init,
+        backgroundFullInterval: TimeInterval = 60 * 60,
+        popoverRefreshInterval: TimeInterval = 30 * 60
+    ) {
         self.state = state
         self.apiClient = client
+        self.now = now
+        self.backgroundFullInterval = backgroundFullInterval
+        self.popoverRefreshInterval = popoverRefreshInterval
     }
 
     func start(port: Int) {
@@ -54,6 +66,7 @@ import AppKit
         // cache-served (warm-up has filled daily/blocks/projects), and quota
         // runs async so it never blocks this initial paint.
         Task { await self.performFullUpdate(forceRefresh: false, forceQuota: false) }
+        scheduleBackgroundFull()
         setMode(.dormant)   // app launches with popover hidden
     }
 
@@ -76,6 +89,11 @@ import AppKit
     // MARK: - Mode state machine
 
     func setMode(_ newMode: RefreshMode) {
+        if newMode == .suspended {
+            stopBackgroundFull()
+        } else {
+            scheduleBackgroundFull()
+        }
         mode = newMode
         stopDataTimers()
         switch newMode {
@@ -83,15 +101,11 @@ import AppKit
             scheduleDormant()
             Task { await self.performBadgeUpdate() }   // immediate refresh on entry
         case .active:
-            // Force-refresh on open so the user sees the latest today data, not a
-            // possibly-stale cache. The 60s active detail timer + manual refresh
-            // keep it fresh afterwards; only this open moment bypasses the cache.
-            Task { await self.performFullUpdate(forceRefresh: true, forceQuota: false) }
+            Task { await self.refreshOnPopoverOpenIfNeeded() }
             if pulseEnabled {
                 samplePulse()  // prime a pulse baseline immediately, don't wait 10s
                 schedulePulse()
             }
-            scheduleActiveFull()
         case .suspended:
             break   // all data timers stopped; daemon healthCheck (AppDelegate) keeps running
         }
@@ -114,27 +128,55 @@ import AppKit
         pulseTimer = t
     }
 
-    private func scheduleActiveFull() {
-        let t = Timer(timeInterval: activeFullInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.performFullUpdate(forceRefresh: false, forceQuota: false) }
+    private func scheduleBackgroundFull() {
+        guard backgroundFullTimer == nil else { return }
+        let t = Timer(timeInterval: backgroundFullInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.performBackgroundRefresh() }
         }
         RunLoop.main.add(t, forMode: .common)
-        fullTimer = t
+        backgroundFullTimer = t
+    }
+
+    private func stopBackgroundFull() {
+        backgroundFullTimer?.invalidate()
+        backgroundFullTimer = nil
     }
 
     private func stopDataTimers() {
         dormantTimer?.invalidate(); dormantTimer = nil
         pulseTimer?.invalidate(); pulseTimer = nil
-        fullTimer?.invalidate(); fullTimer = nil
     }
 
     func stop() {
         stopDataTimers()
+        stopBackgroundFull()
     }
 
     /// Manual refresh (refresh button) — force everything, including external quota.
     func refreshNow() {
         Task { await self.performFullUpdate(forceRefresh: true, forceQuota: true) }
+    }
+
+    /// Full detail refresh for the hourly background timer. It bypasses the
+    /// daemon and quota caches so a closed popover still has current content
+    /// when the user next opens it.
+    func performBackgroundRefresh() async {
+        await performFullUpdate(forceRefresh: true, forceQuota: true)
+    }
+
+    /// Returns true when opening the popover triggered its allowed automatic
+    /// refresh. Repeated opens within 30 minutes leave data unchanged until the
+    /// user explicitly requests a refresh.
+    func refreshOnPopoverOpenIfNeeded() async -> Bool {
+        guard !state.isRefreshing else { return false }
+        let currentTime = now()
+        if let lastPopoverRefreshAt,
+           currentTime.timeIntervalSince(lastPopoverRefreshAt) < popoverRefreshInterval {
+            return false
+        }
+        lastPopoverRefreshAt = currentTime
+        await performFullUpdate(forceRefresh: true, forceQuota: false)
+        return true
     }
 
     // MARK: - dormant: cheap badge update (cache-served)
@@ -165,7 +207,6 @@ import AppKit
             self.state.badgeImage = Self.renderBadgeImage(title: tokenStr)
             self.state.tooltipText = String(
                 format: "TokenDash - %@ tokens today ($%.2f)", tokenStr, totalCost)
-            self.state.isLoading = false
             self.state.errorMessage = nil
         } catch {
             NSLog("[TokenDash] badge update error: \(error.localizedDescription)")
@@ -173,16 +214,24 @@ import AppKit
         }
     }
 
-    // MARK: - active: full popover refresh
+    // MARK: - Full detail refresh
 
-    /// Full refresh for the open popover: daily + blocks + projects + quota +
-    /// derived hourly/projects/models/trend. `forceRefresh` bypasses the daemon
-    /// usage cache (used on popover open); `forceQuota` bypasses the 60s quota
-    /// cache (manual refresh only).
+    /// Refreshes daily, blocks, projects, quota, and all derived popover data.
+    /// `forceRefresh` bypasses the daemon usage cache; `forceQuota` bypasses
+    /// the quota cache for manual and hourly background refreshes.
     func performFullUpdate(forceRefresh: Bool, forceQuota: Bool) async {
         guard let api = apiClient else {
             NSLog("[TokenDash] performFullUpdate called but apiClient is nil")
             return
+        }
+        guard !state.isRefreshing else { return }
+        state.isRefreshing = true
+        if state.todaySummary == nil {
+            state.isLoading = true
+        }
+        defer {
+            state.isLoading = false
+            state.isRefreshing = false
         }
         do {
             let agentsResp = try await api.getAgents()
@@ -194,8 +243,8 @@ import AppKit
             var projectResults: [ProjectsResponse] = []
 
             for agent in agents {
-                // On open (forceRefresh=true) bypass cache for fresh today data;
-                // the 60s active timer passes forceRefresh=false to reuse the cache.
+                // A forced refresh uses fresh daemon data; launch and cached
+                // detail paths can reuse the daemon's existing results.
                 if let d = try? await api.getDaily(agent: agent, refresh: forceRefresh) { dailyResults.append(d) }
                 if let b = try? await api.getBlocks(agent: agent, refresh: forceRefresh) { blockResults.append(b) }
                 if let p = try? await api.getProjects(agent: agent, refresh: forceRefresh) { projectResults.append(p) }
@@ -246,7 +295,6 @@ import AppKit
                 tokenStr, totalCost, cacheRate)
             self.state.todaySummary = summary
             self.state.cacheRate = cacheRate
-            self.state.isLoading = false
             self.state.errorMessage = nil
             self.state.hourlyData = hourly
             self.state.projects = projectRows
@@ -261,6 +309,7 @@ import AppKit
             } else {
                 Task { await self.refreshQuota(force: false) }
             }
+            self.state.lastUpdatedAt = now()
         } catch {
             NSLog("[TokenDash] full update error: \(error.localizedDescription)")
             self.state.errorMessage = error.localizedDescription

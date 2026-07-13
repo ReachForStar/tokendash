@@ -72,7 +72,7 @@ struct SettingsView: View {
                         set: { setLaunchAtLogin($0) }
                     ))
                 }
-                SettingsRow(icon: "arrow.clockwise", title: "Refresh Usage", showDivider: true) {
+                SettingsRow(icon: "arrow.clockwise", title: "Badge Update", showDivider: true) {
                     Picker("", selection: $settings.refreshInterval) {
                         ForEach(SettingsStore.RefreshInterval.allCases) { interval in
                             Text(interval.label).tag(interval)
