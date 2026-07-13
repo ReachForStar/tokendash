@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { z } from 'zod';
 import type { DailyEntry, DailyResponse, ProjectsResponse, BlockEntry, BlocksResponse, ModelBreakdown } from '../shared/types.js';
 import { calculateCost } from './codexPricing.js';
+import { buildUsageFileIndex } from './usageFileIndex.js';
 
 // ---------------------------------------------------------------------------
 // Zod schemas for JSONL event validation (format change detector)
@@ -69,6 +70,27 @@ interface AggregateBucket {
   acc: TokenAccumulator;
   models: Map<string, TokenAccumulator>;
 }
+
+const CODEX_INDEX_VERSION = 'codex-session-v1';
+const CODEX_AGGREGATE_INDEX_VERSION = 'codex-aggregate-v1';
+const DEFAULT_TZ = 'Asia/Shanghai';
+
+interface SerializedAggregateBucket {
+  acc: TokenAccumulator;
+  models: Record<string, TokenAccumulator>;
+}
+
+interface CodexFileAggregate {
+  daily: Record<string, SerializedAggregateBucket>;
+  projects: Record<string, Record<string, SerializedAggregateBucket>>;
+  blocks: Record<string, SerializedAggregateBucket>;
+  projectBlocks: Record<string, Record<string, SerializedAggregateBucket>>;
+}
+
+let responseBundleCache: {
+  signature: string;
+  responses: { daily: DailyResponse; projects: ProjectsResponse; blocks: BlocksResponse };
+} | null = null;
 
 function subtractTokenUsage(
   current: z.infer<typeof TokenUsageSchema>,
@@ -257,9 +279,56 @@ export function parseCodexSession(filepath: string): ParsedSession | null {
 
 /** Parse all Codex sessions. */
 export function parseAllSessions(): ParsedSession[] {
-  return scanCodexSessions()
-    .map(parseCodexSession)
-    .filter((s): s is ParsedSession => s !== null);
+  return loadIndexedSessions().sessions;
+}
+
+function loadIndexedSessions(): { sessions: ParsedSession[]; signature: string } {
+  const result = buildUsageFileIndex<ParsedSession | null, { path: string }>({
+    cacheName: 'codex-sessions',
+    parserVersion: CODEX_INDEX_VERSION,
+    files: scanCodexSessions().map(path => ({ path })),
+    parseFile: file => parseCodexSession(file.path),
+  });
+  return {
+    sessions: result.values.filter((session): session is ParsedSession => session !== null),
+    signature: result.signature,
+  };
+}
+
+function summarizeCodexSession(session: ParsedSession | null): CodexFileAggregate | null {
+  if (!session) return null;
+  const summary: CodexFileAggregate = { daily: {}, projects: {}, blocks: {}, projectBlocks: {} };
+  const projectName = extractProjectName(session.cwd);
+
+  for (const ev of session.tokenEvents) {
+    const model = ev.model || session.model;
+    const dayKey = getDateKey(ev.timestamp, DEFAULT_TZ);
+    const hourKey = getHourKey(ev.timestamp, DEFAULT_TZ);
+
+    addAccToSerializedBucket(bucketFor(summary.daily, dayKey), ev, model);
+    addAccToSerializedBucket(bucketFor(summary.blocks, hourKey), ev, model);
+
+    if (!summary.projects[projectName]) summary.projects[projectName] = {};
+    addAccToSerializedBucket(bucketFor(summary.projects[projectName], dayKey), ev, model);
+
+    if (!summary.projectBlocks[projectName]) summary.projectBlocks[projectName] = {};
+    addAccToSerializedBucket(bucketFor(summary.projectBlocks[projectName], hourKey), ev, model);
+  }
+
+  return summary;
+}
+
+function loadIndexedAggregates(): { summaries: CodexFileAggregate[]; signature: string } {
+  const result = buildUsageFileIndex<CodexFileAggregate | null, { path: string }>({
+    cacheName: 'codex-aggregates',
+    parserVersion: CODEX_AGGREGATE_INDEX_VERSION,
+    files: scanCodexSessions().map(path => ({ path })),
+    parseFile: file => summarizeCodexSession(parseCodexSession(file.path)),
+  });
+  return {
+    summaries: result.values.filter((summary): summary is CodexFileAggregate => summary !== null),
+    signature: result.signature,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +408,37 @@ function addAccToBucket(bucket: AggregateBucket, ev: ParsedTokenEvent, model: st
   if (!model) return;
   if (!bucket.models.has(model)) bucket.models.set(model, emptyAcc());
   addAcc(bucket.models.get(model)!, ev);
+}
+
+function emptySerializedBucket(): SerializedAggregateBucket {
+  return { acc: emptyAcc(), models: {} };
+}
+
+function bucketFor(map: Record<string, SerializedAggregateBucket>, key: string): SerializedAggregateBucket {
+  if (!map[key]) map[key] = emptySerializedBucket();
+  return map[key];
+}
+
+function addAccToSerializedBucket(bucket: SerializedAggregateBucket, ev: ParsedTokenEvent, model: string): void {
+  addAcc(bucket.acc, ev);
+  if (!model) return;
+  if (!bucket.models[model]) bucket.models[model] = emptyAcc();
+  addAcc(bucket.models[model], ev);
+}
+
+function mergeSerializedBucket(target: SerializedAggregateBucket, source: SerializedAggregateBucket): void {
+  mergeAcc(target.acc, source.acc);
+  for (const [model, modelAcc] of Object.entries(source.models)) {
+    if (!target.models[model]) target.models[model] = emptyAcc();
+    mergeAcc(target.models[model], modelAcc);
+  }
+}
+
+function toAggregateBucket(bucket: SerializedAggregateBucket): AggregateBucket {
+  return {
+    acc: bucket.acc,
+    models: new Map(Object.entries(bucket.models)),
+  };
 }
 
 function accToEntry(date: string, acc: TokenAccumulator, modelAccs: Map<string, TokenAccumulator>): DailyEntry {
@@ -422,6 +522,139 @@ export function buildCodexResponsesFromSessions(
     projects: buildProjectsResponse(sessions, options),
     blocks: buildBlocksResponse(sessions, options),
   };
+}
+
+function buildDailyResponseFromSummaries(summaries: CodexFileAggregate[]): DailyResponse {
+  const dailyBuckets: Record<string, SerializedAggregateBucket> = {};
+  const totalsAcc = emptyAcc();
+  const totalModels = new Map<string, TokenAccumulator>();
+
+  for (const summary of summaries) {
+    for (const [date, bucket] of Object.entries(summary.daily)) {
+      mergeSerializedBucket(bucketFor(dailyBuckets, date), bucket);
+      mergeAcc(totalsAcc, bucket.acc);
+      for (const [model, modelAcc] of Object.entries(bucket.models)) {
+        if (!totalModels.has(model)) totalModels.set(model, emptyAcc());
+        mergeAcc(totalModels.get(model)!, modelAcc);
+      }
+    }
+  }
+
+  const daily = Object.entries(dailyBuckets)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, bucket]) => {
+      const { acc, models } = toAggregateBucket(bucket);
+      return accToEntry(date, acc, models);
+    });
+  const totalCost = buildModelBreakdowns(totalModels).reduce((sum, model) => sum + model.cost, 0);
+
+  return {
+    daily,
+    totals: {
+      inputTokens: displayInputTokens(totalsAcc.inputTokens, totalsAcc.cachedInputTokens),
+      outputTokens: totalsAcc.outputTokens,
+      cacheCreationTokens: 0,
+      cacheReadTokens: totalsAcc.cachedInputTokens,
+      totalTokens: totalsAcc.totalTokens,
+      totalCost,
+    },
+  };
+}
+
+function buildProjectsResponseFromSummaries(summaries: CodexFileAggregate[]): ProjectsResponse {
+  const projectBuckets: Record<string, Record<string, SerializedAggregateBucket>> = {};
+
+  for (const summary of summaries) {
+    for (const [projectName, dailyBuckets] of Object.entries(summary.projects)) {
+      if (!projectBuckets[projectName]) projectBuckets[projectName] = {};
+      for (const [date, bucket] of Object.entries(dailyBuckets)) {
+        mergeSerializedBucket(bucketFor(projectBuckets[projectName], date), bucket);
+      }
+    }
+  }
+
+  const projects: Record<string, DailyEntry[]> = {};
+  for (const [projectName, dailyBuckets] of Object.entries(projectBuckets)) {
+    projects[projectName] = Object.entries(dailyBuckets)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, bucket]) => {
+        const { acc, models } = toAggregateBucket(bucket);
+        return accToEntry(date, acc, models);
+      });
+  }
+
+  return { projects };
+}
+
+function buildBlocksResponseFromSummaries(summaries: CodexFileAggregate[], project?: string | null): BlocksResponse {
+  const blockBuckets: Record<string, SerializedAggregateBucket> = {};
+
+  for (const summary of summaries) {
+    const source = project ? summary.projectBlocks[project] || {} : summary.blocks;
+    for (const [hourKey, bucket] of Object.entries(source)) {
+      mergeSerializedBucket(bucketFor(blockBuckets, hourKey), bucket);
+    }
+  }
+
+  const blocks: BlockEntry[] = Object.entries(blockBuckets)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([hourKey, bucket], idx) => {
+      const { acc, models } = toAggregateBucket(bucket);
+      const cost = buildModelBreakdowns(models).reduce((sum, model) => sum + model.cost, 0);
+      const [datePart, timePart] = hourKey.split(' ');
+      const hour = timePart.split(':')[0];
+      return {
+        id: `codex-hour-${idx}`,
+        startTime: `${datePart}T${hour}:00:00`,
+        endTime: `${datePart}T${hour}:59:59`,
+        actualEndTime: null,
+        isActive: false,
+        isGap: false,
+        entries: acc.totalTokens > 0 ? 1 : 0,
+        tokenCounts: {
+          inputTokens: displayInputTokens(acc.inputTokens, acc.cachedInputTokens),
+          outputTokens: acc.outputTokens,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: acc.cachedInputTokens,
+        },
+        totalTokens: acc.totalTokens,
+        costUSD: cost,
+        models: [...models.keys()],
+      };
+    });
+
+  return { blocks };
+}
+
+function usesDefaultBundleOptions(options?: Partial<AggregateOptions>): boolean {
+  return !options || (
+    !options.project
+    && !options.since
+    && !options.until
+    && (!options.timezone || options.timezone === DEFAULT_TZ)
+  );
+}
+
+export function getCodexResponses(options?: Partial<AggregateOptions>): {
+  daily: DailyResponse;
+  projects: ProjectsResponse;
+  blocks: BlocksResponse;
+} {
+  const { summaries, signature } = loadIndexedAggregates();
+  if (usesDefaultBundleOptions(options)) {
+    if (responseBundleCache?.signature === signature) {
+      return responseBundleCache.responses;
+    }
+    const responses = {
+      daily: buildDailyResponseFromSummaries(summaries),
+      projects: buildProjectsResponseFromSummaries(summaries),
+      blocks: buildBlocksResponseFromSummaries(summaries),
+    };
+    responseBundleCache = { signature, responses };
+    return responses;
+  }
+  const { sessions } = loadIndexedSessions();
+  return buildCodexResponsesFromSessions(sessions, options);
 }
 
 function buildDailyResponse(sessions: ParsedSession[], options?: Partial<AggregateOptions>): DailyResponse {
@@ -529,15 +762,21 @@ function buildBlocksResponse(sessions: ParsedSession[], options?: Partial<Aggreg
 
 /** Aggregate and return DailyResponse format (for /daily?agent=codex) */
 export function getDailyResponse(options?: Partial<AggregateOptions>): DailyResponse {
-  return buildDailyResponse(parseAllSessions(), options);
+  return getCodexResponses(options).daily;
 }
 
 /** Aggregate and return ProjectsResponse format (for /projects?agent=codex) */
 export function getProjectsResponse(options?: Partial<AggregateOptions>): ProjectsResponse {
-  return buildProjectsResponse(parseAllSessions(), options);
+  return getCodexResponses(options).projects;
 }
 
 /** Aggregate and return BlocksResponse format (hourly, for /blocks?agent=codex) */
 export function getBlocksResponse(options?: Partial<AggregateOptions>): BlocksResponse {
-  return buildBlocksResponse(parseAllSessions(), options);
+  if (usesDefaultBundleOptions(options)) {
+    return getCodexResponses(options).blocks;
+  }
+  if (!options?.since && !options?.until && (!options?.timezone || options.timezone === DEFAULT_TZ)) {
+    return buildBlocksResponseFromSummaries(loadIndexedAggregates().summaries, options?.project);
+  }
+  return buildBlocksResponse(loadIndexedSessions().sessions, options);
 }

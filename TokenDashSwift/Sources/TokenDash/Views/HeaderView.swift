@@ -4,6 +4,8 @@ import SwiftUI
 struct HeaderView: View {
     let summary: TodaySummary?
     let cacheRate: Double
+    let isRefreshing: Bool
+    let onRefresh: () -> Void
 
     var body: some View {
         HStack(alignment: .lastTextBaseline) {
@@ -20,9 +22,25 @@ struct HeaderView: View {
                         .font(.system(size: 28, weight: .bold, design: .default))
                         .foregroundStyle(Color.tertiaryLabel)
                 }
-                Text("Today · \(todayLabel())")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.secondaryLabel)
+                HStack(spacing: 5) {
+                    Text("Today · \(todayLabel())")
+                    Button(action: onRefresh) {
+                        HStack(spacing: 3) {
+                            if isRefreshing {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                        .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .allowsHitTesting(!isRefreshing)
+                    .help(isRefreshing ? "Refreshing usage data…" : "Refresh usage data")
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.secondaryLabel)
             }
 
             Spacer()
@@ -66,4 +84,5 @@ struct HeaderView: View {
                 .frame(height: 0.5)
         }
     }
+
 }

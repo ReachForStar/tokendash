@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { scanOpenClawSessions } from './openclawParser.js';
 import type { AnalyticsResponse, ToolUsageEntry, DailyCodeChange, DailyToolCall, ProductivityKPIs } from '../shared/types.js';
+import { buildUsageFileIndex } from './usageFileIndex.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -14,6 +15,16 @@ interface ToolCallRecord {
   filePath?: string;
   linesAdded: number;
   linesDeleted: number;
+}
+
+interface ClaudeToolCallFileRef {
+  path: string;
+  projectDir: string;
+}
+
+interface IndexedClaudeToolCalls {
+  projectDir: string;
+  toolCalls: ToolCallRecord[];
 }
 
 // ---------------------------------------------------------------------------
@@ -124,20 +135,17 @@ function matchesProject(dirName: string, filter: string): boolean {
   return extractProjectName(dirName) === extractProjectName(filter);
 }
 
-// Session-level cache (mtime-based)
-const claudeSessionCache = new Map<string, { mtime: number; toolCalls: ToolCallRecord[] }>();
+const CLAUDE_ANALYTICS_INDEX_VERSION = 'claude-analytics-v1';
 
-export function extractClaudeToolCalls(project?: string | null): ToolCallRecord[] {
+function collectClaudeToolCallFiles(): ClaudeToolCallFileRef[] {
   if (!existsSync(CLAUDE_PROJECTS_DIR)) return [];
 
-  const results: ToolCallRecord[] = [];
+  const refs: ClaudeToolCallFileRef[] = [];
   const projectDirs = readdirSync(CLAUDE_PROJECTS_DIR, { withFileTypes: true })
     .filter(d => d.isDirectory())
     .map(d => d.name);
 
   for (const dirName of projectDirs) {
-    if (project && !matchesProject(dirName, project)) continue;
-
     const dirPath = join(CLAUDE_PROJECTS_DIR, dirName);
     let files: string[];
     try {
@@ -147,65 +155,69 @@ export function extractClaudeToolCalls(project?: string | null): ToolCallRecord[
     }
 
     for (const file of files) {
-      const filePath = join(dirPath, file);
-
-      let mtime = 0;
-      try { mtime = statSync(filePath).mtimeMs; } catch { /* ok */ }
-
-      const cached = claudeSessionCache.get(filePath);
-      if (cached && cached.mtime === mtime) {
-        results.push(...cached.toolCalls);
-        continue;
-      }
-
-      const toolCalls: ToolCallRecord[] = [];
-      let content: string;
-      try {
-        content = readFileSync(filePath, 'utf-8');
-      } catch {
-        continue;
-      }
-
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        let obj: Record<string, unknown>;
-        try { obj = JSON.parse(trimmed) as Record<string, unknown>; } catch { continue; }
-
-        if (obj.type !== 'assistant' || !obj.message) continue;
-        const msg = obj.message as Record<string, unknown>;
-        const timestamp = new Date(obj.timestamp as string).getTime();
-        const content_arr = msg.content as Array<Record<string, unknown>> | undefined;
-        if (!content_arr) continue;
-
-        for (const item of content_arr) {
-          if (item.type !== 'tool_use') continue;
-
-          const toolName = normalizeToolName(item.name as string);
-          const input = (item.input as Record<string, unknown>) || {};
-
-          let linesAdded = 0;
-          let linesDeleted = 0;
-          const filePath2 = (input.file_path as string) || undefined;
-
-          if (toolName === 'Edit') {
-            linesDeleted = countLines(input.old_string as string || '');
-            linesAdded = countLines(input.new_string as string || '');
-          } else if (toolName === 'Write') {
-            linesAdded = countLines(input.content as string || '');
-          }
-
-          toolCalls.push({ toolName, timestamp, filePath: filePath2, linesAdded, linesDeleted });
-        }
-      }
-
-      claudeSessionCache.set(filePath, { mtime, toolCalls });
-      results.push(...toolCalls);
+      refs.push({ path: join(dirPath, file), projectDir: dirName });
     }
   }
 
-  return results;
+  return refs;
+}
+
+function parseClaudeToolCallFile(ref: ClaudeToolCallFileRef): IndexedClaudeToolCalls {
+  const toolCalls: ToolCallRecord[] = [];
+  let content: string;
+  try {
+    content = readFileSync(ref.path, 'utf-8');
+  } catch {
+    return { projectDir: ref.projectDir, toolCalls };
+  }
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let obj: Record<string, unknown>;
+    try { obj = JSON.parse(trimmed) as Record<string, unknown>; } catch { continue; }
+
+    if (obj.type !== 'assistant' || !obj.message) continue;
+    const msg = obj.message as Record<string, unknown>;
+    const timestamp = new Date(obj.timestamp as string).getTime();
+    const content_arr = msg.content as Array<Record<string, unknown>> | undefined;
+    if (!content_arr) continue;
+
+    for (const item of content_arr) {
+      if (item.type !== 'tool_use') continue;
+
+      const toolName = normalizeToolName(item.name as string);
+      const input = (item.input as Record<string, unknown>) || {};
+
+      let linesAdded = 0;
+      let linesDeleted = 0;
+      const filePath2 = (input.file_path as string) || undefined;
+
+      if (toolName === 'Edit') {
+        linesDeleted = countLines(input.old_string as string || '');
+        linesAdded = countLines(input.new_string as string || '');
+      } else if (toolName === 'Write') {
+        linesAdded = countLines(input.content as string || '');
+      }
+
+      toolCalls.push({ toolName, timestamp, filePath: filePath2, linesAdded, linesDeleted });
+    }
+  }
+
+  return { projectDir: ref.projectDir, toolCalls };
+}
+
+export function extractClaudeToolCalls(project?: string | null): ToolCallRecord[] {
+  const result = buildUsageFileIndex<IndexedClaudeToolCalls, ClaudeToolCallFileRef>({
+    cacheName: 'claude-analytics',
+    parserVersion: CLAUDE_ANALYTICS_INDEX_VERSION,
+    files: collectClaudeToolCallFiles(),
+    parseFile: parseClaudeToolCallFile,
+  });
+  return result.values
+    .filter(entry => !project || matchesProject(entry.projectDir, project))
+    .flatMap(entry => entry.toolCalls);
 }
 
 // ---------------------------------------------------------------------------

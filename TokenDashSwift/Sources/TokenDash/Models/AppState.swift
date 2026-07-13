@@ -19,6 +19,8 @@ import Combine
 
     // Popover data
     var isLoading = true
+    var isRefreshing = false
+    var lastUpdatedAt: Date?
     var cacheRate: Double = 0
     var todaySummary: TodaySummary?
     var hourlyData: [HourBucket] = []

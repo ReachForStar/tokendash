@@ -6,19 +6,17 @@ import SwiftUI
 @Observable final class SettingsStore {
     static let shared = SettingsStore()
 
-    /// How often the badge/popover re-fetches usage + quota.
+    /// How often popover detail data refreshes in the background.
     enum RefreshInterval: Double, CaseIterable, Identifiable {
-        case thirtySeconds = 30
-        case oneMinute = 60
-        case fiveMinutes = 300
-        case fifteenMinutes = 900
+        case tenMinutes = 600
+        case thirtyMinutes = 1_800
+        case oneHour = 3_600
         var id: Double { rawValue }
         var label: String {
             switch self {
-            case .thirtySeconds: return "30 seconds"
-            case .oneMinute: return "1 minute"
-            case .fiveMinutes: return "5 minutes"
-            case .fifteenMinutes: return "15 minutes"
+            case .tenMinutes: return "10 min"
+            case .thirtyMinutes: return "30 min"
+            case .oneHour: return "1 hour (Low Power)"
             }
         }
     }
@@ -64,8 +62,13 @@ import SwiftUI
 
     private init() {
         let d = UserDefaults.standard
-        let refreshRaw = d.object(forKey: Keys.refreshInterval) as? Double ?? RefreshInterval.thirtySeconds.rawValue
-        self.refreshInterval = RefreshInterval(rawValue: refreshRaw) ?? .thirtySeconds
+        let storedRefreshRaw = d.object(forKey: Keys.refreshInterval) as? Double
+        let refreshInterval = storedRefreshRaw
+            .flatMap(RefreshInterval.init(rawValue:)) ?? .oneHour
+        self.refreshInterval = refreshInterval
+        if storedRefreshRaw != refreshInterval.rawValue {
+            d.set(refreshInterval.rawValue, forKey: Keys.refreshInterval)
+        }
         let appRaw = d.string(forKey: Keys.appearance) ?? Appearance.system.rawValue
         self.appearance = Appearance(rawValue: appRaw) ?? .system
         self.lowQuotaNotificationsEnabled = d.object(forKey: Keys.lowQuotaNotif) as? Bool ?? true

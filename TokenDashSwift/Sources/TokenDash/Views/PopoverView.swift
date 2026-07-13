@@ -28,7 +28,12 @@ struct PopoverView: View {
 
     private var mainContent: some View {
         VStack(spacing: 0) {
-            HeaderView(summary: state.todaySummary, cacheRate: state.cacheRate)
+            HeaderView(
+                summary: state.todaySummary,
+                cacheRate: state.cacheRate,
+                isRefreshing: state.isRefreshing,
+                onRefresh: { state.badgeUpdater?.refreshNow() }
+            )
 
             if let error = state.errorMessage {
                 errorBanner(error)

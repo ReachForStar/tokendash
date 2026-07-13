@@ -52,6 +52,88 @@ final class BadgeUpdaterModeTests: XCTestCase {
 
         let lastQuotaRefresh = await mock.lastQuotaRefresh
         XCTAssertEqual(lastQuotaRefresh, true, "手动刷新必须强刷 quota")
+        XCTAssertNotNil(state.lastUpdatedAt, "手动刷新完成后必须记录最近刷新时间")
+        XCTAssertFalse(state.isRefreshing, "手动刷新完成后必须退出 loading 状态")
+    }
+
+    func testPopoverRefreshIsThrottledForThirtyMinutes() async throws {
+        let state = AppState()
+        let mock = MockAPIClient()
+        var now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let updater = BadgeUpdater(
+            state: state,
+            client: mock,
+            now: { now },
+            popoverRefreshInterval: 30 * 60
+        )
+
+        let refreshedInitially = await updater.refreshOnPopoverOpenIfNeeded()
+        XCTAssertTrue(refreshedInitially)
+        let firstCounts = await mock.snapshot()
+        XCTAssertGreaterThan(firstCounts.daily, 0)
+        let firstDailyRefresh = await mock.lastDailyRefresh
+        XCTAssertEqual(firstDailyRefresh, true)
+
+        now.addTimeInterval(29 * 60 + 59)
+        let refreshedBeforeInterval = await updater.refreshOnPopoverOpenIfNeeded()
+        XCTAssertFalse(refreshedBeforeInterval)
+        let throttledCounts = await mock.snapshot()
+        XCTAssertEqual(throttledCounts.daily, firstCounts.daily)
+
+        now.addTimeInterval(2)
+        let refreshedAfterInterval = await updater.refreshOnPopoverOpenIfNeeded()
+        XCTAssertTrue(refreshedAfterInterval)
+        let finalCounts = await mock.snapshot()
+        XCTAssertGreaterThan(finalCounts.daily, firstCounts.daily)
+    }
+
+    func testBackgroundRefreshForceRefreshesDetailsAndQuota() async throws {
+        let state = AppState()
+        let mock = MockAPIClient()
+        let updater = BadgeUpdater(state: state, client: mock)
+
+        await updater.performBackgroundRefresh()
+
+        let lastDailyRefresh = await mock.lastDailyRefresh
+        let lastQuotaRefresh = await mock.lastQuotaRefresh
+        XCTAssertEqual(lastDailyRefresh, true, "每小时后台刷新必须绕过详情缓存")
+        XCTAssertEqual(lastQuotaRefresh, true, "每小时后台刷新必须绕过 quota 缓存")
+        XCTAssertNotNil(state.lastUpdatedAt)
+        XCTAssertFalse(state.isRefreshing)
+    }
+
+    func testPopoverOpenAutoRefreshUsesMostRecentFullRefreshTime() async throws {
+        let state = AppState()
+        let mock = MockAPIClient()
+        var now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let updater = BadgeUpdater(
+            state: state,
+            client: mock,
+            now: { now },
+            popoverRefreshInterval: 30 * 60
+        )
+
+        await updater.performBackgroundRefresh()
+        let backgroundCounts = await mock.snapshot()
+        XCTAssertNotNil(state.lastUpdatedAt)
+
+        now.addTimeInterval(10 * 60)
+        let refreshedOnOpen = await updater.refreshOnPopoverOpenIfNeeded()
+
+        XCTAssertFalse(refreshedOnOpen, "打开菜单栏的自动刷新必须把最近一次后台/手动全量刷新也算进同一个节流周期")
+        let openedCounts = await mock.snapshot()
+        XCTAssertEqual(openedCounts.daily, backgroundCounts.daily)
+        XCTAssertEqual(openedCounts.blocks, backgroundCounts.blocks)
+        XCTAssertEqual(openedCounts.projects, backgroundCounts.projects)
+    }
+
+    func testRefreshIntervalSettingsExposeDetailRefreshCadences() {
+        XCTAssertEqual(
+            SettingsStore.RefreshInterval.allCases.map(\.rawValue),
+            [10 * 60, 30 * 60, 60 * 60].map(Double.init)
+        )
+        XCTAssertEqual(SettingsStore.RefreshInterval.oneHour.label, "1 hour (Low Power)")
+        XCTAssertNil(SettingsStore.RefreshInterval(rawValue: 30), "legacy badge cadence should fall back to the one-hour default")
     }
 }
 
@@ -63,6 +145,7 @@ actor MockAPIClient: APIClientProtocol {
     private(set) var projects = 0
     private(set) var quota = 0
     private(set) var lastQuotaRefresh: Bool? = nil
+    private(set) var lastDailyRefresh: Bool? = nil
 
     struct Snapshot {
         let agents: Int; let daily: Int; let blocks: Int
@@ -78,6 +161,7 @@ actor MockAPIClient: APIClientProtocol {
     }
     func getDaily(agent: String, refresh: Bool) async throws -> DailyResponse {
         daily += 1
+        lastDailyRefresh = refresh
         return DailyResponse(daily: [])
     }
     func getBlocks(agent: String, refresh: Bool) async throws -> BlocksResponse {
