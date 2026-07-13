@@ -1,24 +1,67 @@
 import Foundation
 
+protocol DaemonProcess: AnyObject {
+    var executableURL: URL? { get set }
+    var arguments: [String]? { get set }
+    var environment: [String: String]? { get set }
+    var standardOutput: Any? { get set }
+    var standardError: Any? { get set }
+    var isRunning: Bool { get }
+
+    func run() throws
+    func terminate()
+    func interrupt()
+}
+
+extension Process: DaemonProcess {}
+
+enum DaemonProbe: Equatable {
+    case compatible
+    case tokenDashVersionMismatch
+    case unavailableOrForeign
+}
+
 /// Manages the Node.js daemon process lifecycle.
 @Observable class DaemonManager {
-    private var process: Process?
+    private var process: (any DaemonProcess)?
     private let fileManager = FileManager.default
+    private let dataDirOverride: String?
+    private let nodeFinder: () throws -> URL
+    private let daemonScriptFinder: () throws -> String
+    private let processFactory: () -> any DaemonProcess
+    private let probeOverride: ((Int) async -> DaemonProbe)?
+    private let startupTimeout: TimeInterval
+    private let pollIntervalNanoseconds: UInt64
+    private let discoveryPorts: [Int]
 
     var isRunning = false
     var port: Int?
 
-    private var dataDir: String { NSHomeDirectory() + "/.tokendash" }
+    private var dataDir: String { dataDirOverride ?? NSHomeDirectory() + "/.tokendash" }
     private var pidPath: String { dataDir + "/daemon.pid" }
     private var portPath: String { dataDir + "/daemon.port" }
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 
-    private enum DaemonProbe: Equatable {
-        case compatible
-        case tokenDashVersionMismatch
-        case unavailableOrForeign
+    init(
+        dataDir: String? = nil,
+        nodeFinder: (() throws -> URL)? = nil,
+        daemonScriptFinder: (() throws -> String)? = nil,
+        processFactory: @escaping () -> any DaemonProcess = { Process() },
+        probe: ((Int) async -> DaemonProbe)? = nil,
+        startupTimeout: TimeInterval = 10,
+        pollIntervalNanoseconds: UInt64 = 500_000_000,
+        discoveryPorts: [Int] = Array(3456...3475)
+    ) {
+        self.dataDirOverride = dataDir
+        self.processFactory = processFactory
+        self.probeOverride = probe
+        self.startupTimeout = startupTimeout
+        self.pollIntervalNanoseconds = pollIntervalNanoseconds
+        self.discoveryPorts = discoveryPorts
+        self.nodeFinder = nodeFinder ?? { try Self.findNode() }
+        self.daemonScriptFinder = daemonScriptFinder ?? { try Self.findDaemonScript() }
     }
 
     // MARK: - Public
@@ -30,8 +73,7 @@ import Foundation
         if let existingPort = readPortFile() {
             switch await probeDaemon(port: existingPort) {
             case .compatible:
-                isRunning = true
-                self.port = existingPort
+                markRunning(port: existingPort)
                 return existingPort
             case .tokenDashVersionMismatch:
                 await cleanupIncompatibleDaemon(pid: readPidFile())
@@ -43,18 +85,27 @@ import Foundation
             }
         }
 
+        // If a previous retry wrote no usable port file but did leave a daemon
+        // listening on a fallback port, reattach to it instead of spawning yet
+        // another 3457/3458/... daemon.
+        if let discoveredPort = await discoverCompatibleDaemonPort() {
+            markRunning(port: discoveredPort)
+            writePortFile(discoveredPort)
+            return discoveredPort
+        }
+
         // Find node binary
-        let nodeURL = try findNode()
+        let nodeURL = try nodeFinder()
 
         // Find daemon script
-        let daemonScript = try findDaemonScript()
+        let daemonScript = try daemonScriptFinder()
 
         // Clean stale files
         cleanupFiles()
         ensureDataDir()
 
         // Launch process
-        let proc = Process()
+        let proc = processFactory()
         proc.executableURL = nodeURL
         proc.arguments = [daemonScript, "--port", "3456"]
         proc.environment = ProcessInfo.processInfo.environment
@@ -63,18 +114,25 @@ import Foundation
         try proc.run()
         self.process = proc
 
-        // Wait for port file to appear (max 10s)
-        let deadline = Date().addingTimeInterval(10)
-        while Date() < deadline {
-            if let port = readPortFile(), await probeDaemon(port: port) == .compatible {
-                isRunning = true
-                self.port = port
-                return port
+        do {
+            // Wait for port file to appear. If readiness does not happen, the
+            // process started by THIS attempt must be torn down; otherwise each
+            // retry leaves one more healthy daemon on 3456/3457/3458 while the
+            // Swift app remains detached from the service.
+            let deadline = Date().addingTimeInterval(startupTimeout)
+            while Date() < deadline {
+                if let port = readPortFile(), await probeDaemon(port: port) == .compatible {
+                    markRunning(port: port)
+                    return port
+                }
+                try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
             }
-            try await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-        }
 
-        throw DaemonError.timeout
+            throw DaemonError.timeout
+        } catch {
+            await cleanupFailedLaunch(proc)
+            throw error
+        }
     }
 
     /// Quick liveness probe — true if the daemon we spawned is still running
@@ -99,7 +157,7 @@ import Foundation
 
     // MARK: - Discovery
 
-    private func findNode() throws -> URL {
+    private static func findNode() throws -> URL {
         // Try common paths + nvm + volta + fnm
         let home = NSHomeDirectory()
         let candidates = [
@@ -136,7 +194,7 @@ import Foundation
         throw DaemonError.nodeNotFound
     }
 
-    private func findDaemonScript() throws -> String {
+    private static func findDaemonScript() throws -> String {
         // In packaged app: <bundle>/Contents/Resources/server/dist/daemon.cjs
         let bundle = Bundle.main.bundlePath
         let packagedPath = bundle + "/Contents/Resources/server/dist/daemon.cjs"
@@ -178,12 +236,20 @@ import Foundation
         return port
     }
 
+    private func writePortFile(_ port: Int) {
+        ensureDataDir()
+        try? String(port).write(toFile: portPath, atomically: true, encoding: .utf8)
+    }
+
     private func isProcessAlive(pid: pid_t?) -> Bool {
         guard let pid = pid, pid > 0 else { return false }
         return kill(pid, 0) == 0
     }
 
     private func probeDaemon(port: Int) async -> DaemonProbe {
+        if let probeOverride {
+            return await probeOverride(port)
+        }
         do {
             let info = try await APIClient(port: port).getAppInfo(timeout: 1.0)
             guard info.packageName == APIClient.expectedPackageName else {
@@ -196,6 +262,36 @@ import Foundation
         } catch {
             return .unavailableOrForeign
         }
+    }
+
+    private func markRunning(port: Int) {
+        isRunning = true
+        self.port = port
+    }
+
+    private func discoverCompatibleDaemonPort() async -> Int? {
+        for port in discoveryPorts {
+            if await probeDaemon(port: port) == .compatible {
+                return port
+            }
+        }
+        return nil
+    }
+
+    private func cleanupFailedLaunch(_ launchedProcess: any DaemonProcess) async {
+        if launchedProcess.isRunning {
+            launchedProcess.terminate()
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if launchedProcess.isRunning {
+                launchedProcess.interrupt()
+            }
+        }
+        if process === launchedProcess {
+            process = nil
+        }
+        isRunning = false
+        port = nil
+        cleanupFiles()
     }
 
     /// Network probe — true if the daemon on the current port responds with
