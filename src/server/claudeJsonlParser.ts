@@ -1,7 +1,8 @@
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { DailyEntry, DailyResponse, ProjectsResponse, Totals, BlockEntry } from '../shared/types.js';
+import { buildUsageFileIndex } from './usageFileIndex.js';
 
 // ---------------------------------------------------------------------------
 // Model pricing (USD per 1M tokens)
@@ -67,13 +68,42 @@ interface ParsedUsage {
   projectDir: string;
 }
 
+interface ClaudeUsageFileRef {
+  path: string;
+  projectDir: string;
+}
+
+interface ClaudeModelBucket {
+  input: number;
+  output: number;
+  cacheCreation: number;
+  cacheRead: number;
+  cost: number;
+}
+
+interface ClaudeAggregateBucket {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  models: Record<string, ClaudeModelBucket>;
+}
+
+interface ClaudeFileAggregate {
+  daily: Record<string, ClaudeAggregateBucket>;
+  projects: Record<string, Record<string, ClaudeAggregateBucket>>;
+  blocks: Record<string, ClaudeAggregateBucket>;
+  projectBlocks: Record<string, Record<string, ClaudeAggregateBucket>>;
+}
+
 // ---------------------------------------------------------------------------
 // JSONL parsing with mtime cache
 // ---------------------------------------------------------------------------
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
-
-const fileCache = new Map<string, { mtime: number; entries: ParsedUsage[] }>();
+const CLAUDE_INDEX_VERSION = 'claude-aggregate-v1';
 
 const projectNameCache = new Map<string, string>();
 
@@ -146,75 +176,83 @@ function findJsonlFiles(dir: string): string[] {
   return results;
 }
 
-function parseAllSessions(project?: string | null): ParsedUsage[] {
+function collectClaudeUsageFiles(): ClaudeUsageFileRef[] {
   if (!existsSync(CLAUDE_PROJECTS_DIR)) return [];
 
-  const results: ParsedUsage[] = [];
+  const files: ClaudeUsageFileRef[] = [];
   const projectDirs = readdirSync(CLAUDE_PROJECTS_DIR, { withFileTypes: true })
     .filter(d => d.isDirectory())
     .map(d => d.name);
 
   for (const dirName of projectDirs) {
-    if (project && !matchesProject(dirName, project)) continue;
-
     const dirPath = join(CLAUDE_PROJECTS_DIR, dirName);
-    const files = findJsonlFiles(dirPath);
-
-    for (const filePath of files) {
-
-      let mtime = 0;
-      try { mtime = statSync(filePath).mtimeMs; } catch { /* ok */ }
-
-      const cached = fileCache.get(filePath);
-      if (cached && cached.mtime === mtime) {
-        results.push(...cached.entries);
-        continue;
-      }
-
-      const entries: ParsedUsage[] = [];
-      let content: string;
-      try {
-        content = readFileSync(filePath, 'utf-8');
-      } catch {
-        continue;
-      }
-
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-
-        let obj: Record<string, unknown>;
-        try { obj = JSON.parse(trimmed) as Record<string, unknown>; } catch { continue; }
-
-        if (obj.type !== 'assistant' || !obj.message) continue;
-        const msg = obj.message as Record<string, unknown>;
-        const usage = (msg.usage as Record<string, number>) || {};
-
-        const inputTokens = usage.input_tokens || 0;
-        const outputTokens = usage.output_tokens || 0;
-        const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
-        const cacheReadTokens = usage.cache_read_input_tokens || 0;
-        const totalTokens = totalClaudeTokens(inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens);
-
-        if (totalTokens === 0) continue;
-
-        entries.push({
-          timestamp: obj.timestamp as string,
-          model: (msg.model as string) || 'unknown',
-          inputTokens,
-          outputTokens,
-          cacheCreationTokens,
-          cacheReadTokens,
-          projectDir: dirName,
-        });
-      }
-
-      fileCache.set(filePath, { mtime, entries });
-      results.push(...entries);
-    }
+    files.push(...findJsonlFiles(dirPath).map(path => ({ path, projectDir: dirName })));
   }
 
-  return results;
+  return files;
+}
+
+function parseClaudeUsageFile(file: ClaudeUsageFileRef): ClaudeFileAggregate {
+  const summary: ClaudeFileAggregate = { daily: {}, projects: {}, blocks: {}, projectBlocks: {} };
+  let content: string;
+  try {
+    content = readFileSync(file.path, 'utf-8');
+  } catch {
+    return summary;
+  }
+  const projectName = extractProjectName(file.projectDir);
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let obj: Record<string, unknown>;
+    try { obj = JSON.parse(trimmed) as Record<string, unknown>; } catch { continue; }
+
+    if (obj.type !== 'assistant' || !obj.message) continue;
+    const msg = obj.message as Record<string, unknown>;
+    const usage = (msg.usage as Record<string, number>) || {};
+
+    const inputTokens = usage.input_tokens || 0;
+    const outputTokens = usage.output_tokens || 0;
+    const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+    const cacheReadTokens = usage.cache_read_input_tokens || 0;
+    const totalTokens = totalClaudeTokens(inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens);
+
+    if (totalTokens === 0) continue;
+
+    const timestamp = obj.timestamp as string;
+    const parsedUsage = {
+      model: (msg.model as string) || 'unknown',
+      inputTokens,
+      outputTokens,
+      cacheCreationTokens,
+      cacheReadTokens,
+    };
+    const dayKey = getDateKey(timestamp, DEFAULT_TZ);
+    const hourKey = getHourKey(timestamp, DEFAULT_TZ);
+
+    addUsageToBucket(claudeBucketFor(summary.daily, dayKey), parsedUsage);
+    addUsageToBucket(claudeBucketFor(summary.blocks, hourKey), parsedUsage);
+
+    if (!summary.projects[projectName]) summary.projects[projectName] = {};
+    addUsageToBucket(claudeBucketFor(summary.projects[projectName], dayKey), parsedUsage);
+
+    if (!summary.projectBlocks[projectName]) summary.projectBlocks[projectName] = {};
+    addUsageToBucket(claudeBucketFor(summary.projectBlocks[projectName], hourKey), parsedUsage);
+  }
+
+  return summary;
+}
+
+function loadClaudeAggregates(): ClaudeFileAggregate[] {
+  const result = buildUsageFileIndex<ClaudeFileAggregate, ClaudeUsageFileRef>({
+    cacheName: 'claude-usage',
+    parserVersion: CLAUDE_INDEX_VERSION,
+    files: collectClaudeUsageFiles(),
+    parseFile: parseClaudeUsageFile,
+  });
+  return result.values;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +324,88 @@ function toDailyEntry(agg: DayAgg): DailyEntry {
   };
 }
 
+function emptyClaudeBucket(): ClaudeAggregateBucket {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    models: {},
+  };
+}
+
+function claudeBucketFor(map: Record<string, ClaudeAggregateBucket>, key: string): ClaudeAggregateBucket {
+  if (!map[key]) map[key] = emptyClaudeBucket();
+  return map[key];
+}
+
+function addUsageToBucket(bucket: ClaudeAggregateBucket, usage: Omit<ParsedUsage, 'projectDir' | 'timestamp'>): void {
+  bucket.inputTokens += usage.inputTokens;
+  bucket.outputTokens += usage.outputTokens;
+  bucket.cacheCreationTokens += usage.cacheCreationTokens;
+  bucket.cacheReadTokens += usage.cacheReadTokens;
+  bucket.totalTokens += totalClaudeTokens(
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cacheCreationTokens,
+    usage.cacheReadTokens,
+  );
+  const cost = calculateCost(
+    usage.inputTokens,
+    usage.cacheReadTokens,
+    usage.outputTokens,
+    usage.model,
+    usage.cacheCreationTokens,
+  );
+  bucket.totalCost += cost;
+
+  if (!bucket.models[usage.model]) {
+    bucket.models[usage.model] = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cost: 0 };
+  }
+  const model = bucket.models[usage.model];
+  model.input += usage.inputTokens;
+  model.output += usage.outputTokens;
+  model.cacheCreation += usage.cacheCreationTokens;
+  model.cacheRead += usage.cacheReadTokens;
+  model.cost += cost;
+}
+
+function mergeClaudeBucket(target: ClaudeAggregateBucket, source: ClaudeAggregateBucket): void {
+  target.inputTokens += source.inputTokens;
+  target.outputTokens += source.outputTokens;
+  target.cacheCreationTokens += source.cacheCreationTokens;
+  target.cacheReadTokens += source.cacheReadTokens;
+  target.totalTokens += source.totalTokens;
+  target.totalCost += source.totalCost;
+
+  for (const [modelName, model] of Object.entries(source.models)) {
+    if (!target.models[modelName]) {
+      target.models[modelName] = { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cost: 0 };
+    }
+    const targetModel = target.models[modelName];
+    targetModel.input += model.input;
+    targetModel.output += model.output;
+    targetModel.cacheCreation += model.cacheCreation;
+    targetModel.cacheRead += model.cacheRead;
+    targetModel.cost += model.cost;
+  }
+}
+
+function dailyEntryFromBucket(date: string, bucket: ClaudeAggregateBucket): DailyEntry {
+  return toDailyEntry({
+    date,
+    inputTokens: bucket.inputTokens,
+    outputTokens: bucket.outputTokens,
+    cacheCreationTokens: bucket.cacheCreationTokens,
+    cacheReadTokens: bucket.cacheReadTokens,
+    totalTokens: bucket.totalTokens,
+    totalCost: bucket.totalCost,
+    models: new Map(Object.entries(bucket.models)),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -293,40 +413,18 @@ function toDailyEntry(agg: DayAgg): DailyEntry {
 const DEFAULT_TZ = 'Asia/Shanghai';
 
 export function getDailyResponse(project?: string | null, tz = DEFAULT_TZ): DailyResponse {
-  const entries = parseAllSessions(project);
-  const dayMap = new Map<string, DayAgg>();
+  const dayBuckets: Record<string, ClaudeAggregateBucket> = {};
 
-  for (const e of entries) {
-    const date = getDateKey(e.timestamp, tz);
-    if (!dayMap.has(date)) {
-      dayMap.set(date, {
-        date, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0,
-        cacheReadTokens: 0, totalTokens: 0, totalCost: 0,
-        models: new Map(),
-      });
+  for (const summary of loadClaudeAggregates()) {
+    const source = project ? summary.projects[extractProjectName(project)] || {} : summary.daily;
+    for (const [date, bucket] of Object.entries(source)) {
+      mergeClaudeBucket(claudeBucketFor(dayBuckets, date), bucket);
     }
-    const agg = dayMap.get(date)!;
-    agg.inputTokens += e.inputTokens;
-    agg.outputTokens += e.outputTokens;
-    agg.cacheCreationTokens += e.cacheCreationTokens;
-    agg.cacheReadTokens += e.cacheReadTokens;
-    agg.totalTokens += totalClaudeTokens(e.inputTokens, e.outputTokens, e.cacheCreationTokens, e.cacheReadTokens);
-
-    const cost = calculateCost(e.inputTokens, e.cacheReadTokens, e.outputTokens, e.model, e.cacheCreationTokens);
-    agg.totalCost += cost;
-
-    if (!agg.models.has(e.model)) {
-      agg.models.set(e.model, { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cost: 0 });
-    }
-    const m = agg.models.get(e.model)!;
-    m.input += e.inputTokens;
-    m.output += e.outputTokens;
-    m.cacheCreation += e.cacheCreationTokens;
-    m.cacheRead += e.cacheReadTokens;
-    m.cost += cost;
   }
 
-  const daily = [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date)).map(toDailyEntry);
+  const daily = Object.entries(dayBuckets)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, bucket]) => dailyEntryFromBucket(date, bucket));
   const totals: Totals = daily.reduce((acc, d) => ({
     inputTokens: acc.inputTokens + d.inputTokens,
     outputTokens: acc.outputTokens + d.outputTokens,
@@ -340,105 +438,56 @@ export function getDailyResponse(project?: string | null, tz = DEFAULT_TZ): Dail
 }
 
 export function getProjectsResponse(tz = DEFAULT_TZ): ProjectsResponse {
-  const entries = parseAllSessions();
-  const projectMap = new Map<string, Map<string, DayAgg>>();
+  const projectBuckets: Record<string, Record<string, ClaudeAggregateBucket>> = {};
 
-  for (const e of entries) {
-    const date = getDateKey(e.timestamp, tz);
-    const projectName = extractProjectName(e.projectDir);
-
-    if (!projectMap.has(projectName)) {
-      projectMap.set(projectName, new Map());
+  for (const summary of loadClaudeAggregates()) {
+    for (const [projectName, dailyBuckets] of Object.entries(summary.projects)) {
+      if (!projectBuckets[projectName]) projectBuckets[projectName] = {};
+      for (const [date, bucket] of Object.entries(dailyBuckets)) {
+        mergeClaudeBucket(claudeBucketFor(projectBuckets[projectName], date), bucket);
+      }
     }
-    const dayMap = projectMap.get(projectName)!;
-
-    if (!dayMap.has(date)) {
-      dayMap.set(date, {
-        date, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0,
-        cacheReadTokens: 0, totalTokens: 0, totalCost: 0,
-        models: new Map(),
-      });
-    }
-    const agg = dayMap.get(date)!;
-    agg.inputTokens += e.inputTokens;
-    agg.outputTokens += e.outputTokens;
-    agg.cacheCreationTokens += e.cacheCreationTokens;
-    agg.cacheReadTokens += e.cacheReadTokens;
-    agg.totalTokens += totalClaudeTokens(e.inputTokens, e.outputTokens, e.cacheCreationTokens, e.cacheReadTokens);
-
-    const cost = calculateCost(e.inputTokens, e.cacheReadTokens, e.outputTokens, e.model, e.cacheCreationTokens);
-    agg.totalCost += cost;
-
-    if (!agg.models.has(e.model)) {
-      agg.models.set(e.model, { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, cost: 0 });
-    }
-    const m = agg.models.get(e.model)!;
-    m.input += e.inputTokens;
-    m.output += e.outputTokens;
-    m.cacheCreation += e.cacheCreationTokens;
-    m.cacheRead += e.cacheReadTokens;
-    m.cost += cost;
   }
 
   const projects: Record<string, DailyEntry[]> = {};
-  for (const [projectName, dayMap] of projectMap) {
-    projects[projectName] = [...dayMap.values()]
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map(toDailyEntry);
+  for (const [projectName, dailyBuckets] of Object.entries(projectBuckets)) {
+    projects[projectName] = Object.entries(dailyBuckets)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, bucket]) => dailyEntryFromBucket(date, bucket));
   }
 
   return { projects };
 }
 
 export function getBlocksResponse(project?: string | null, tz = DEFAULT_TZ): { blocks: BlockEntry[] } {
-  const entries = parseAllSessions(project);
-  const hourMap = new Map<string, {
-    inputTokens: number; outputTokens: number; cacheCreationTokens: number;
-    cacheReadTokens: number; costUSD: number; models: Set<string>;
-  }>();
+  const hourBuckets: Record<string, ClaudeAggregateBucket> = {};
 
-  for (const e of entries) {
-    const hourKey = getHourKey(e.timestamp, tz);
-    if (!hourMap.has(hourKey)) {
-      hourMap.set(hourKey, {
-        inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0,
-        cacheReadTokens: 0, costUSD: 0, models: new Set(),
-      });
+  for (const summary of loadClaudeAggregates()) {
+    const source = project ? summary.projectBlocks[extractProjectName(project)] || {} : summary.blocks;
+    for (const [hourKey, bucket] of Object.entries(source)) {
+      mergeClaudeBucket(claudeBucketFor(hourBuckets, hourKey), bucket);
     }
-    const bucket = hourMap.get(hourKey)!;
-    bucket.inputTokens += e.inputTokens;
-    bucket.outputTokens += e.outputTokens;
-    bucket.cacheCreationTokens += e.cacheCreationTokens;
-    bucket.cacheReadTokens += e.cacheReadTokens;
-    bucket.costUSD += calculateCost(e.inputTokens, e.cacheReadTokens, e.outputTokens, e.model, e.cacheCreationTokens);
-    bucket.models.add(e.model);
   }
 
-  const blocks: BlockEntry[] = [];
-  let idx = 0;
-  for (const [hourKey, bucket] of hourMap) {
-    const totalTokens = totalClaudeTokens(bucket.inputTokens, bucket.outputTokens, bucket.cacheCreationTokens, bucket.cacheReadTokens);
-    blocks.push({
+  const blocks: BlockEntry[] = Object.entries(hourBuckets)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([hourKey, bucket], idx) => ({
       id: `claude-${idx}`,
       startTime: `${hourKey}:00:00`,
       endTime: `${hourKey}:59:59`,
       actualEndTime: null,
       isActive: false,
       isGap: false,
-      entries: totalTokens > 0 ? 1 : 0,
+      entries: bucket.totalTokens > 0 ? 1 : 0,
       tokenCounts: {
         inputTokens: bucket.inputTokens,
         outputTokens: bucket.outputTokens,
         cacheCreationInputTokens: bucket.cacheCreationTokens,
         cacheReadInputTokens: bucket.cacheReadTokens,
       },
-      totalTokens,
-      costUSD: Math.round(bucket.costUSD * 10000) / 10000,
-      models: [...bucket.models],
-    });
-    idx++;
-  }
-
-  blocks.sort((a, b) => a.startTime.localeCompare(b.startTime));
+      totalTokens: bucket.totalTokens,
+      costUSD: Math.round(bucket.totalCost * 10000) / 10000,
+      models: Object.keys(bucket.models),
+    }));
   return { blocks };
 }
