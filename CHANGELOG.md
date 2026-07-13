@@ -1,5 +1,11 @@
 # Changelog
 
+### v1.8.2
+- **Reliable menu bar refresh cadence** — refresh popover detail data in the background, let users choose 10 min / 30 min / 1 hour background intervals, and keep popover-open auto refreshes throttled against the most recent full refresh instead of reloading on every open.
+- **Manual refresh polish** — make the header refresh control icon-only, show loading during explicit and automatic refreshes, and update the displayed timestamp from the latest completed refresh.
+- **Faster dashboard switching on large histories** — add a persistent usage-file index so long-running Claude and Codex histories reuse historical aggregates and only recompute changed files.
+- **Daemon lifecycle fix from PR #24** — prevent daemon retry flows from multiplying local services after startup or port conflicts, keeping the menu bar app attached to a single healthy daemon.
+
 ### v1.8.1
 - **Correct Codex GPT-5.5 costs** — price `gpt-5.5` separately from `gpt-5.4` so Codex cost estimates match the current 2x higher input, cached input, and output rates used by `ccusage`.
 - **More accurate Codex model attribution** — track model changes within a single Codex session instead of assigning the whole session to the first model, fixing days where `gpt-5.5` usage could appear under `gpt-5.4`.
