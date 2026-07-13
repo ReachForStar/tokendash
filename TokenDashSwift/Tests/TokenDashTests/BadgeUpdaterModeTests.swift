@@ -102,6 +102,31 @@ final class BadgeUpdaterModeTests: XCTestCase {
         XCTAssertFalse(state.isRefreshing)
     }
 
+    func testPopoverOpenAutoRefreshUsesMostRecentFullRefreshTime() async throws {
+        let state = AppState()
+        let mock = MockAPIClient()
+        var now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let updater = BadgeUpdater(
+            state: state,
+            client: mock,
+            now: { now },
+            popoverRefreshInterval: 30 * 60
+        )
+
+        await updater.performBackgroundRefresh()
+        let backgroundCounts = await mock.snapshot()
+        XCTAssertNotNil(state.lastUpdatedAt)
+
+        now.addTimeInterval(10 * 60)
+        let refreshedOnOpen = await updater.refreshOnPopoverOpenIfNeeded()
+
+        XCTAssertFalse(refreshedOnOpen, "打开菜单栏的自动刷新必须把最近一次后台/手动全量刷新也算进同一个节流周期")
+        let openedCounts = await mock.snapshot()
+        XCTAssertEqual(openedCounts.daily, backgroundCounts.daily)
+        XCTAssertEqual(openedCounts.blocks, backgroundCounts.blocks)
+        XCTAssertEqual(openedCounts.projects, backgroundCounts.projects)
+    }
+
     func testRefreshIntervalSettingsExposeDetailRefreshCadences() {
         XCTAssertEqual(
             SettingsStore.RefreshInterval.allCases.map(\.rawValue),

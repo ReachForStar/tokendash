@@ -36,7 +36,6 @@ import AppKit
     private var dormantTimer: Timer?
     private var pulseTimer: Timer?
     private var backgroundFullTimer: Timer?
-    private var lastPopoverRefreshAt: Date?
 
     private var activeAgents: [String] = []
     private var isPulseSampling = false
@@ -175,16 +174,16 @@ import AppKit
     }
 
     /// Returns true when opening the popover triggered its allowed automatic
-    /// refresh. Repeated opens within 30 minutes leave data unchanged until the
-    /// user explicitly requests a refresh.
+    /// refresh. The throttle is based on the most recent full detail refresh,
+    /// regardless of whether it came from a manual click, the background timer,
+    /// or a previous popover open.
     func refreshOnPopoverOpenIfNeeded() async -> Bool {
         guard !state.isRefreshing else { return false }
         let currentTime = now()
-        if let lastPopoverRefreshAt,
-           currentTime.timeIntervalSince(lastPopoverRefreshAt) < popoverRefreshInterval {
+        if let lastUpdatedAt = state.lastUpdatedAt,
+           currentTime.timeIntervalSince(lastUpdatedAt) < popoverRefreshInterval {
             return false
         }
-        lastPopoverRefreshAt = currentTime
         await performFullUpdate(forceRefresh: true, forceQuota: false)
         return true
     }
