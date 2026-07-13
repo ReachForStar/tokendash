@@ -4,7 +4,6 @@ import SwiftUI
 struct HeaderView: View {
     let summary: TodaySummary?
     let cacheRate: Double
-    let lastUpdatedAt: Date?
     let isRefreshing: Bool
     let onRefresh: () -> Void
 
@@ -30,14 +29,17 @@ struct HeaderView: View {
                             if isRefreshing {
                                 ProgressView()
                                     .controlSize(.mini)
+                                    .tint(Color.primary.opacity(0.85))
                             } else {
                                 Image(systemName: "arrow.clockwise")
-                                Text(lastUpdatedLabel)
                             }
                         }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.primary.opacity(0.85))
+                        .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isRefreshing)
+                    .allowsHitTesting(!isRefreshing)
                     .help(isRefreshing ? "Refreshing usage data…" : "Refresh usage data")
                 }
                 .font(.system(size: 12, weight: .medium))
@@ -86,8 +88,4 @@ struct HeaderView: View {
         }
     }
 
-    private var lastUpdatedLabel: String {
-        guard let lastUpdatedAt else { return "Update" }
-        return "Updated \(lastUpdatedAt.formatted(date: .omitted, time: .shortened))"
-    }
 }

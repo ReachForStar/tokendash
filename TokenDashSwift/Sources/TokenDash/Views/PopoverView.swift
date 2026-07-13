@@ -31,7 +31,6 @@ struct PopoverView: View {
             HeaderView(
                 summary: state.todaySummary,
                 cacheRate: state.cacheRate,
-                lastUpdatedAt: state.lastUpdatedAt,
                 isRefreshing: state.isRefreshing,
                 onRefresh: { state.badgeUpdater?.refreshNow() }
             )
