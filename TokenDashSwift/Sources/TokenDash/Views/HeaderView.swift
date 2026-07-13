@@ -29,13 +29,10 @@ struct HeaderView: View {
                             if isRefreshing {
                                 ProgressView()
                                     .controlSize(.mini)
-                                    .tint(Color.primary.opacity(0.85))
                             } else {
                                 Image(systemName: "arrow.clockwise")
                             }
                         }
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.primary.opacity(0.85))
                         .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.plain)
