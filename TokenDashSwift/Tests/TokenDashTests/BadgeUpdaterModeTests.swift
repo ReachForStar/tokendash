@@ -101,6 +101,15 @@ final class BadgeUpdaterModeTests: XCTestCase {
         XCTAssertNotNil(state.lastUpdatedAt)
         XCTAssertFalse(state.isRefreshing)
     }
+
+    func testRefreshIntervalSettingsExposeDetailRefreshCadences() {
+        XCTAssertEqual(
+            SettingsStore.RefreshInterval.allCases.map(\.rawValue),
+            [10 * 60, 30 * 60, 60 * 60].map(Double.init)
+        )
+        XCTAssertEqual(SettingsStore.RefreshInterval.oneHour.label, "1 hour (Low Power)")
+        XCTAssertNil(SettingsStore.RefreshInterval(rawValue: 30), "legacy badge cadence should fall back to the one-hour default")
+    }
 }
 
 /// 计数型 mock — 记录每个端点被调用的次数与关键参数，供模式断言。

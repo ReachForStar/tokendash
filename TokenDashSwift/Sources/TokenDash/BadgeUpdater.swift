@@ -6,8 +6,8 @@ import AppKit
 ///
 /// Refresh is driven by a three-state machine (`RefreshMode`) instead of a fixed
 /// high-frequency timer:
-/// - `.dormant`  — popover closed: cheap badge updates plus an hourly full
-///                 refresh of the popover's detail data.
+/// - `.dormant`  — popover closed: cheap badge updates plus a configurable
+///                 background refresh of the popover's detail data.
 /// - `.active`   — popover open: a full refresh at most once every 30 minutes;
 ///                 subsequent refreshes are manual until the interval elapses.
 /// - `.suspended`— system sleep / low power: all data timers stopped.
@@ -18,11 +18,14 @@ import AppKit
     enum RefreshMode { case dormant, active, suspended }
     private(set) var mode: RefreshMode = .dormant
 
-    // Cadences (seconds). The badge is cache-served and retains its user-selected
-    // cadence; detail data refreshes in the background once an hour.
-    private var dormantInterval: TimeInterval { SettingsStore.shared.refreshInterval.rawValue }
+    // Cadences (seconds). The badge is cache-served and stays cheap; detail data
+    // refreshes in the background at the user-selected cadence.
+    private let dormantInterval: TimeInterval = 30
     private let activePulseInterval: TimeInterval = 10.0
-    private let backgroundFullInterval: TimeInterval
+    private let backgroundFullIntervalOverride: TimeInterval?
+    private var backgroundFullInterval: TimeInterval {
+        backgroundFullIntervalOverride ?? SettingsStore.shared.refreshInterval.rawValue
+    }
     private let popoverRefreshInterval: TimeInterval
     private let now: () -> Date
 
@@ -49,13 +52,13 @@ import AppKit
         state: AppState,
         client: (any APIClientProtocol)? = nil,
         now: @escaping () -> Date = Date.init,
-        backgroundFullInterval: TimeInterval = 60 * 60,
+        backgroundFullInterval: TimeInterval? = nil,
         popoverRefreshInterval: TimeInterval = 30 * 60
     ) {
         self.state = state
         self.apiClient = client
         self.now = now
-        self.backgroundFullInterval = backgroundFullInterval
+        self.backgroundFullIntervalOverride = backgroundFullInterval
         self.popoverRefreshInterval = popoverRefreshInterval
     }
 
@@ -152,12 +155,19 @@ import AppKit
         stopBackgroundFull()
     }
 
+    func applyRefreshIntervalChange() {
+        stopBackgroundFull()
+        if mode != .suspended {
+            scheduleBackgroundFull()
+        }
+    }
+
     /// Manual refresh (refresh button) — force everything, including external quota.
     func refreshNow() {
         Task { await self.performFullUpdate(forceRefresh: true, forceQuota: true) }
     }
 
-    /// Full detail refresh for the hourly background timer. It bypasses the
+    /// Full detail refresh for the background timer. It bypasses the
     /// daemon and quota caches so a closed popover still has current content
     /// when the user next opens it.
     func performBackgroundRefresh() async {

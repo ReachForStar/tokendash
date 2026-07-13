@@ -72,13 +72,16 @@ struct SettingsView: View {
                         set: { setLaunchAtLogin($0) }
                     ))
                 }
-                SettingsRow(icon: "arrow.clockwise", title: "Badge Update", showDivider: true) {
+                SettingsRow(icon: "arrow.clockwise", title: "Background Refresh", showDivider: true) {
                     Picker("", selection: $settings.refreshInterval) {
                         ForEach(SettingsStore.RefreshInterval.allCases) { interval in
                             Text(interval.label).tag(interval)
                         }
                     }
-                    .pickerStyle(.menu).controlSize(.small).frame(width: 110).labelsHidden()
+                    .pickerStyle(.menu).controlSize(.small).frame(width: 150).labelsHidden()
+                    .onChange(of: settings.refreshInterval) { _, _ in
+                        state.badgeUpdater?.applyRefreshIntervalChange()
+                    }
                 }
                 SettingsRow(icon: "circle.lefthalf.filled", title: "Appearance", showDivider: false) {
                     Picker("", selection: $settings.appearance) {
