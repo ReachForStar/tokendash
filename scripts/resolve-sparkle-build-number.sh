@@ -91,6 +91,9 @@ process.stdout.write(uniqueUrls.join("\n") + (uniqueUrls.length ? "\n" : ""));
 REMOTE_VERSIONS=()
 FETCHED_ANY=0
 FETCHED_RECENT_RELEASES=0
+RECENT_APPCAST_URL_COUNT=0
+RECENT_APPCAST_SUCCESS_COUNT=0
+RECENT_APPCAST_FAILURE_COUNT=0
 
 add_versions_from_url() {
     local url="$1"
@@ -99,15 +102,25 @@ add_versions_from_url() {
         echo "Warning: unable to fetch Sparkle appcast: $url" >&2
         return 1
     fi
-    FETCHED_ANY=1
     versions="$(printf '%s' "$xml" | extract_versions || true)"
     if [ -z "$versions" ]; then
         echo "Warning: Sparkle appcast has no sparkle:version values: $url" >&2
         return 1
     fi
+    FETCHED_ANY=1
     while IFS= read -r version; do
         [ -n "$version" ] && REMOTE_VERSIONS+=("$version")
     done <<< "$versions"
+}
+
+add_recent_versions_from_url() {
+    local url="$1"
+    RECENT_APPCAST_URL_COUNT=$((RECENT_APPCAST_URL_COUNT + 1))
+    if add_versions_from_url "$url"; then
+        RECENT_APPCAST_SUCCESS_COUNT=$((RECENT_APPCAST_SUCCESS_COUNT + 1))
+    else
+        RECENT_APPCAST_FAILURE_COUNT=$((RECENT_APPCAST_FAILURE_COUNT + 1))
+    fi
 }
 
 # Always inspect the configured feed first. In production this is GitHub's
@@ -120,15 +133,18 @@ add_versions_from_url "$FEED_URL" || true
 if [ -n "${SPARKLE_APPCAST_URLS:-}" ]; then
     FETCHED_RECENT_RELEASES=1
     while IFS= read -r url; do
-        [ -n "$url" ] && add_versions_from_url "$url" || true
+        [ -n "$url" ] && add_recent_versions_from_url "$url"
     done <<< "$SPARKLE_APPCAST_URLS"
 else
     if releases_json="$(fetch_releases_json 2>/dev/null)"; then
         FETCHED_RECENT_RELEASES=1
         urls="$(printf '%s' "$releases_json" | extract_appcast_urls || true)"
         while IFS= read -r url; do
-            [ -n "$url" ] && add_versions_from_url "$url" || true
+            [ -n "$url" ] && add_recent_versions_from_url "$url"
         done <<< "$urls"
+        if [ "$RECENT_APPCAST_URL_COUNT" -eq 0 ]; then
+            echo "Warning: recent GitHub Releases did not include appcast.xml assets for $REPO" >&2
+        fi
     else
         echo "Warning: unable to fetch recent GitHub Releases for $REPO" >&2
     fi
@@ -141,6 +157,14 @@ if [ "$STRICT" = "1" ]; then
     fi
     if [ "$FETCHED_RECENT_RELEASES" -ne 1 ]; then
         echo "Error: unable to inspect recent GitHub Release appcasts; refusing release build." >&2
+        exit 1
+    fi
+    if [ "$RECENT_APPCAST_URL_COUNT" -eq 0 ]; then
+        echo "Error: no recent GitHub Release appcasts were available to inspect; refusing release build." >&2
+        exit 1
+    fi
+    if [ "$RECENT_APPCAST_FAILURE_COUNT" -ne 0 ]; then
+        echo "Error: unable to inspect all recent GitHub Release appcasts; refusing release build." >&2
         exit 1
     fi
 fi

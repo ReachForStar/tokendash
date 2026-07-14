@@ -148,6 +148,58 @@ XML
     expect(resolved).toBe('118');
   });
 
+  it('fails strict release builds when recent appcasts cannot be inspected', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'tokendash-appcast-'));
+    const curlStub = join(tempDir, 'curl');
+    writeFileSync(curlStub, `#!/bin/bash
+url="\${@: -1}"
+case "$url" in
+  *releases/latest/download/appcast.xml)
+    cat <<'XML'
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel><item><sparkle:version>87</sparkle:version></item></channel>
+</rss>
+XML
+    ;;
+  *api.github.com*)
+    cat <<'JSON'
+[
+  {"assets":[{"name":"appcast.xml","browser_download_url":"https://example.com/v1.8.1/appcast.xml"}]}
+]
+JSON
+    ;;
+  *v1.8.1*)
+    exit 22
+    ;;
+esac
+`, { mode: 0o755 });
+
+    let error: unknown;
+    try {
+      execFileSync('bash', ['scripts/resolve-sparkle-build-number.sh'], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          BUILD_NUMBER: '87',
+          CURL_BIN: curlStub,
+          GH_BIN: join(tempDir, 'missing-gh'),
+          SPARKLE_BUILD_STRICT: '1',
+          SPARKLE_APPCAST_URLS: '',
+          SPARKLE_FEED_URL: '',
+          GITHUB_RELEASES_API_URL: '',
+        },
+        encoding: 'utf8',
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({ status: 1 });
+    expect(String((error as { stderr?: Buffer })?.stderr)).toContain(
+      'unable to inspect all recent GitHub Release appcasts'
+    );
+  });
+
   it('forces native menu bar refreshes past server-side caches', () => {
     const apiClient = readFileSync('TokenDashSwift/Sources/TokenDash/Services/APIClient.swift', 'utf8');
     const badgeUpdater = readFileSync('TokenDashSwift/Sources/TokenDash/BadgeUpdater.swift', 'utf8');
