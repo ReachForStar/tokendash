@@ -97,6 +97,9 @@ matching public key.
   highest `sparkle:version` found in the latest and recent published appcasts.
   The deploy flow runs this check in strict mode so a release cannot ship when
   prior appcasts cannot be inspected.
+- `package.json`'s semver must also move forward. `deploy.sh` refuses versions
+  that are less than or equal to the latest published npm package, GitHub
+  Release, or remote release tag.
 - If `SUPublicEDKey` is empty (keys not generated), `package-app.sh` warns and
   the build runs but installed copies will **reject** updates until a key is set.
 - The distributed macOS app is ad-hoc signed and is not notarized. First-time

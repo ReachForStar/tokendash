@@ -69,6 +69,7 @@ fi
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     fail "GitHub Release $TAG already exists"
 fi
+"$REPO_ROOT/scripts/assert-release-version-advances.sh" "$VERSION"
 
 if ! $DRY_RUN; then
     [ "$(git branch --show-current)" = "main" ] || fail "deploy must run from main"

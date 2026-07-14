@@ -200,6 +200,38 @@ esac
     );
   });
 
+  it('refuses a release version that does not advance past published versions', () => {
+    let error: unknown;
+    try {
+      execFileSync('bash', ['scripts/assert-release-version-advances.sh', '1.8.2'], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          RELEASE_VERSION_REFERENCES: '1.8.2\nv1.8.1\n1.7.5',
+        },
+        encoding: 'utf8',
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({ status: 1 });
+    expect(String((error as { stderr?: Buffer })?.stderr)).toContain(
+      'release version 1.8.2 must be greater than latest published 1.8.2'
+    );
+  });
+
+  it('accepts a release version that advances past published versions', () => {
+    expect(() => execFileSync('bash', ['scripts/assert-release-version-advances.sh', '1.8.3'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        RELEASE_VERSION_REFERENCES: '1.8.2\nv1.8.1\n1.7.5',
+      },
+      encoding: 'utf8',
+    })).not.toThrow();
+  });
+
   it('forces native menu bar refreshes past server-side caches', () => {
     const apiClient = readFileSync('TokenDashSwift/Sources/TokenDash/Services/APIClient.swift', 'utf8');
     const badgeUpdater = readFileSync('TokenDashSwift/Sources/TokenDash/BadgeUpdater.swift', 'utf8');
