@@ -7,7 +7,7 @@ import {
   classifyHttpError,
   HttpError,
 } from '../../server/quota/helpers.js';
-import { resolveCodexBinary } from '../../server/quota/adapters/codex.js';
+import { normalizeCodexWindows, resolveCodexBinary } from '../../server/quota/adapters/codex.js';
 import {
   claudeKeychainServiceNames,
   extractClaudeAccessToken,
@@ -297,6 +297,55 @@ describe('Claude adapter credential detection', () => {
 });
 
 describe('Codex CLI discovery', () => {
+  it('drops Codex placeholder tiers while keeping the real weekly window', () => {
+    const windows = normalizeCodexWindows({
+      rateLimitsByLimitId: {
+        weekly: {
+          limitName: 'weekly',
+          primary: { usedPercent: 0 },
+          secondary: { usedPercent: 42, windowDurationMins: 10080, resetsAt: 1782015024 },
+        },
+      },
+    });
+
+    expect(windows.map((w) => [w.id, w.label, w.usedPercent, w.durationMins])).toEqual([
+      ['codex_weekly_secondary', 'Weekly · Weekly', 42, 10080],
+    ]);
+  });
+
+  it('keeps a future real Codex 5-hour window when the provider reports one', () => {
+    const windows = normalizeCodexWindows({
+      rateLimitsByLimitId: {
+        codex: {
+          limitName: 'codex',
+          primary: { usedPercent: 16, windowDurationMins: 300, resetsAt: 1781997024 },
+          secondary: { usedPercent: 42, windowDurationMins: 10080, resetsAt: 1782015024 },
+        },
+      },
+    });
+
+    expect(windows.map((w) => [w.id, w.label, w.usedPercent, w.durationMins])).toEqual([
+      ['codex_codex_primary', 'Codex · 5-Hour', 16, 300],
+      ['codex_codex_secondary', 'Codex · Weekly', 42, 10080],
+    ]);
+  });
+
+  it('keeps a zero-usage Codex weekly window when it has real reset metadata', () => {
+    const windows = normalizeCodexWindows({
+      rateLimitsByLimitId: {
+        codex: {
+          limitName: 'codex',
+          primary: { usedPercent: 0, windowDurationMins: 10080, resetsAt: 1782015024 },
+        },
+      },
+    });
+
+    expect(windows).toHaveLength(1);
+    expect(windows[0].usedPercent).toBe(0);
+    expect(windows[0].durationMins).toBe(10080);
+    expect(windows[0].resetsAt).toBeDefined();
+  });
+
   it('prefers the official Codex app binary when GUI PATH is minimal', () => {
     const executable = '/Applications/Codex.app/Contents/Resources/codex';
     const resolved = resolveCodexBinary({

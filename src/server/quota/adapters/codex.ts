@@ -2,7 +2,7 @@ import { existsSync, readdirSync, accessSync, constants } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import type { QuotaSnapshot } from '../types.js';
+import type { QuotaSnapshot, QuotaWindow } from '../types.js';
 import type { QuotaAdapter } from '../adapter.js';
 import { QuotaError, baseSnapshot } from '../adapter.js';
 import { unixToIso, windowFromPercent } from '../helpers.js';
@@ -19,18 +19,20 @@ import { unixToIso, windowFromPercent } from '../helpers.js';
  * or the OS keyring; presence of auth.json is our cheap configured check.
  */
 
-interface CodexRateLimit {
+export interface CodexRateLimit {
   limitId?: string;
   limitName?: string | null;
   primary?: { usedPercent?: number; windowDurationMins?: number; resetsAt?: number } | null;
   secondary?: { usedPercent?: number; windowDurationMins?: number; resetsAt?: number } | null;
 }
 
-interface CodexRateLimitsResult {
+export interface CodexRateLimitsResult {
   rateLimits?: CodexRateLimit;
   rateLimitsByLimitId?: Record<string, CodexRateLimit>;
   planType?: string;
 }
+
+type CodexRateLimitTier = NonNullable<CodexRateLimit['primary']>;
 
 function codexHome(): string {
   return process.env.CODEX_HOME || join(homedir(), '.codex');
@@ -49,23 +51,7 @@ export const codexAdapter: QuotaAdapter = {
 
   async fetch(): Promise<QuotaSnapshot> {
     const result = await queryRateLimits();
-    const buckets = result.rateLimitsByLimitId ?? (result.rateLimits ? { primary: result.rateLimits } : {});
-    const windows = [];
-
-    for (const [key, bucket] of Object.entries(buckets)) {
-      if (bucket.primary) {
-        windows.push(windowFromPercent(`codex_${key}_primary`, labelForBucket(key, 'primary', bucket), bucket.primary.usedPercent ?? 0, {
-          durationMins: bucket.primary.windowDurationMins,
-          resetsAt: unixToIso(bucket.primary.resetsAt),
-        }));
-      }
-      if (bucket.secondary) {
-        windows.push(windowFromPercent(`codex_${key}_secondary`, labelForBucket(key, 'secondary', bucket), bucket.secondary.usedPercent ?? 0, {
-          durationMins: bucket.secondary.windowDurationMins,
-          resetsAt: unixToIso(bucket.secondary.resetsAt),
-        }));
-      }
-    }
+    const windows = normalizeCodexWindows(result);
 
     const snap = baseSnapshot('codex', 'OpenAI Codex', {
       planName: result.planType ? capitalize(result.planType) : undefined,
@@ -74,6 +60,52 @@ export const codexAdapter: QuotaAdapter = {
     return { ...snap, status: { state: 'ok' } };
   },
 };
+
+export function normalizeCodexWindows(result: CodexRateLimitsResult): QuotaWindow[] {
+  const buckets = result.rateLimitsByLimitId ?? (result.rateLimits ? { primary: result.rateLimits } : {});
+  const candidates = [];
+
+  for (const [key, bucket] of Object.entries(buckets)) {
+    if (bucket.primary) {
+      candidates.push(windowCandidate(key, 'primary', bucket, bucket.primary));
+    }
+    if (bucket.secondary) {
+      candidates.push(windowCandidate(key, 'secondary', bucket, bucket.secondary));
+    }
+  }
+
+  // Codex currently exposes only a weekly Coding Plan limit. Some app-server
+  // versions still return a compatibility/placeholder tier next to the real
+  // weekly tier; exposing it creates a duplicate "Wk" chip with 0% and no reset.
+  // Keep any real window (including a future 5h limit) and only drop empty
+  // placeholder tiers that carry no duration/reset metadata.
+  return candidates
+    .filter((candidate) => !isPlaceholderTier(candidate.tier))
+    .map((candidate) => candidate.window);
+}
+
+function windowCandidate(
+  key: string,
+  tierName: 'primary' | 'secondary',
+  bucket: CodexRateLimit,
+  tier: CodexRateLimitTier,
+) {
+  return {
+    key,
+    bucket,
+    tier,
+    window: windowFromPercent(`codex_${key}_${tierName}`, labelForBucket(key, tierName, bucket), tier.usedPercent ?? 0, {
+      durationMins: tier.windowDurationMins,
+      resetsAt: unixToIso(tier.resetsAt),
+    }),
+  };
+}
+
+function isPlaceholderTier(tier: CodexRateLimitTier): boolean {
+  return (tier.usedPercent ?? 0) === 0
+    && !tier.windowDurationMins
+    && !tier.resetsAt;
+}
 
 function labelForBucket(key: string, tier: 'primary' | 'secondary', bucket: CodexRateLimit): string {
   const dur = tier === 'primary' ? bucket.primary?.windowDurationMins : bucket.secondary?.windowDurationMins;
