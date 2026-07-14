@@ -92,9 +92,11 @@ matching public key.
 
 ## Notes
 
-- `CFBundleVersion` must be an incrementing integer. It's derived from
-  `git rev-list --count HEAD`, so each commit that gets packaged bumps it. Don't
-  set it manually.
+- `CFBundleVersion` must be an incrementing integer. Packaging starts from
+  `BUILD_NUMBER` or `git rev-list --count HEAD`, then raises it above the
+  highest `sparkle:version` found in the latest and recent published appcasts.
+  The deploy flow runs this check in strict mode so a release cannot ship when
+  prior appcasts cannot be inspected.
 - If `SUPublicEDKey` is empty (keys not generated), `package-app.sh` warns and
   the build runs but installed copies will **reject** updates until a key is set.
 - The distributed macOS app is ad-hoc signed and is not notarized. First-time

@@ -86,7 +86,7 @@ npm run test:e2e
 step "Building npm package, macOS app, and DMG"
 rm -f "$APPCAST"
 npm pack --dry-run >/dev/null
-npm run build:dmg
+SPARKLE_BUILD_STRICT=1 npm run build:dmg
 [ -s "$DMG" ] || fail "DMG was not created: $DMG"
 
 step "Generating signed Sparkle appcast"
