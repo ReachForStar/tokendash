@@ -1,5 +1,8 @@
 # Changelog
 
+### v1.8.4
+- **Restore reliable Codex Coding Plan loading** — fetch Codex quota through a quota-only app-server path with plugins disabled, avoiding unrelated remote plugin warmups that could block for ~20 seconds on proxy-only networks and leave the menu bar without Codex quota data.
+
 ### v1.8.3
 - **Correct Codex Coding Plan display** — hide empty Codex quota placeholder windows so the menu bar shows the current weekly limit once, while still preserving real future 5-hour windows if Codex brings them back.
 - **Safer release updates** — require both the app version and Sparkle build number to move forward before publishing, preventing releases that installed apps would reject during auto-update.
