@@ -1,5 +1,9 @@
 # Changelog
 
+### v1.8.3
+- **Correct Codex Coding Plan display** — hide empty Codex quota placeholder windows so the menu bar shows the current weekly limit once, while still preserving real future 5-hour windows if Codex brings them back.
+- **Safer release updates** — require both the app version and Sparkle build number to move forward before publishing, preventing releases that installed apps would reject during auto-update.
+
 ### v1.8.2
 - **Reliable menu bar refresh cadence** — refresh popover detail data in the background, let users choose 10 min / 30 min / 1 hour background intervals, and keep popover-open auto refreshes throttled against the most recent full refresh instead of reloading on every open.
 - **Manual refresh polish** — make the header refresh control icon-only, show loading during explicit and automatic refreshes, and update the displayed timestamp from the latest completed refresh.
