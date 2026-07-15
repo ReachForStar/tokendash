@@ -34,6 +34,12 @@ export class QuotaError extends Error {
 export interface QuotaAdapter {
   readonly provider: QuotaProviderId;
   readonly displayName: string;
+  /**
+   * Optional provider-specific timeout. Some local CLIs (notably Codex
+   * app-server) can cold-start slowly, while hosted HTTP quota endpoints should
+   * still fail fast under the service default.
+   */
+  readonly fetchTimeoutMs?: number;
 
   /** True when credentials/config exist for this provider locally. Cheap, no network. */
   isConfigured(): Promise<boolean>;

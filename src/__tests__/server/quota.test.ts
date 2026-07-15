@@ -22,10 +22,12 @@ function fakeAdapter(provider: QuotaProviderId, displayName: string, behavior: {
   snapshot?: QuotaSnapshot;
   error?: QuotaError;
   configuredOverride?: boolean;
+  fetchTimeoutMs?: number;
 }): QuotaAdapter {
   return {
     provider,
     displayName,
+    fetchTimeoutMs: behavior.fetchTimeoutMs,
     isConfigured: async () => behavior.configured !== false,
     fetch: async () => {
       if (behavior.error) throw behavior.error;
@@ -135,6 +137,26 @@ describe('QuotaService', () => {
     const res = await service.fetchAll();
     expect(res.providers).toHaveLength(2);
     expect(res.providers.every((p) => p.status.state !== 'ok')).toBe(true);
+  });
+
+  it('honors provider-specific timeouts for slow local quota providers', async () => {
+    const slowCodex = fakeAdapter('codex', 'OpenAI Codex', {
+      configured: true,
+      fetchTimeoutMs: 30,
+    });
+    slowCodex.fetch = async () => {
+      await new Promise((r) => setTimeout(r, 15));
+      return makeSnapshot('codex', 'OpenAI Codex');
+    };
+    const registry = new QuotaAdapterRegistry();
+    registry.register(slowCodex);
+    const service = new QuotaService(registry, new QuotaCache(), null, 5);
+
+    const res = await service.fetchAll();
+
+    expect(res.providers).toHaveLength(1);
+    expect(res.providers[0].status.state).toBe('ok');
+    expect(res.providers[0].windows).toHaveLength(1);
   });
 
   it('validates a proposed credential without requiring it to be stored', async () => {

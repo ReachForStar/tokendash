@@ -41,6 +41,12 @@ function codexHome(): string {
 export const codexAdapter: QuotaAdapter = {
   provider: 'codex',
   displayName: 'OpenAI Codex',
+  // Codex quota comes through the local `codex app-server`. On cold launch it
+  // can take 15-25s to initialize and read account state, especially from a
+  // packaged macOS app with a minimal environment. Keep hosted providers on the
+  // global fast timeout, but give Codex enough time to return real windows
+  // instead of flashing an empty/timed-out Coding Plan card after app updates.
+  fetchTimeoutMs: 30_000,
 
   async isConfigured(): Promise<boolean> {
     // Only surface Codex when the official login file and a runnable official

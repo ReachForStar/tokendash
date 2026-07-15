@@ -111,7 +111,7 @@ export class QuotaService {
     try {
       const snapshot = await withTimeout(
         adapter.fetch({ credential }),
-        this.fetchTimeoutMs,
+        timeoutForAdapter(adapter, this.fetchTimeoutMs),
         provider,
       );
       const validated = validateQuotaSnapshot(snapshot);
@@ -123,7 +123,11 @@ export class QuotaService {
 
   private async fetchWithTimeout(adapter: QuotaAdapter): Promise<QuotaSnapshot> {
     try {
-      const snapshot = await withTimeout(adapter.fetch(), this.fetchTimeoutMs, adapter.provider);
+      const snapshot = await withTimeout(
+        adapter.fetch(),
+        timeoutForAdapter(adapter, this.fetchTimeoutMs),
+        adapter.provider,
+      );
       const validated = validateQuotaSnapshot(snapshot);
       this.cache.set(validated);
       return validated;
@@ -152,6 +156,12 @@ export class QuotaService {
       status,
     };
   }
+}
+
+function timeoutForAdapter(adapter: QuotaAdapter, defaultTimeoutMs: number): number {
+  return adapter.fetchTimeoutMs && adapter.fetchTimeoutMs > 0
+    ? adapter.fetchTimeoutMs
+    : defaultTimeoutMs;
 }
 
 function statusForError(err: unknown, timeoutMs: number): QuotaProviderStatus {
