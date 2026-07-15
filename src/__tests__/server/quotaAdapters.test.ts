@@ -7,7 +7,7 @@ import {
   classifyHttpError,
   HttpError,
 } from '../../server/quota/helpers.js';
-import { normalizeCodexWindows, resolveCodexBinary } from '../../server/quota/adapters/codex.js';
+import { codexAppServerArgs, normalizeCodexWindows, resolveCodexBinary } from '../../server/quota/adapters/codex.js';
 import {
   claudeKeychainServiceNames,
   extractClaudeAccessToken,
@@ -297,6 +297,10 @@ describe('Claude adapter credential detection', () => {
 });
 
 describe('Codex CLI discovery', () => {
+  it('starts Codex app-server with plugins disabled for quota-only reads', () => {
+    expect(codexAppServerArgs()).toEqual(['--disable', 'plugins', 'app-server']);
+  });
+
   it('drops Codex placeholder tiers while keeping the real weekly window', () => {
     const windows = normalizeCodexWindows({
       rateLimitsByLimitId: {

@@ -141,7 +141,7 @@ async function queryRateLimits(): Promise<CodexRateLimitsResult> {
   }
   const binaryDir = dirname(codexBinary);
   const childPath = [binaryDir, process.env.PATH].filter(Boolean).join(':');
-  const proc = spawn(codexBinary, ['app-server'], {
+  const proc = spawn(codexBinary, codexAppServerArgs(), {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, PATH: childPath },
   });
@@ -160,6 +160,14 @@ async function queryRateLimits(): Promise<CodexRateLimitsResult> {
     client.dispose();
     try { proc.kill('SIGKILL'); } catch { /* already gone */ }
   }
+}
+
+export function codexAppServerArgs(): string[] {
+  // TokenDash only needs account/rateLimits from the app-server. Loading the
+  // full Codex plugin system can trigger remote plugin warmups; on machines
+  // where direct chatgpt.com access is blocked and only curl/system traffic is
+  // proxied, that unrelated warmup can add ~20s before quota is returned.
+  return ['--disable', 'plugins', 'app-server'];
 }
 
 function toQuotaError(err: unknown): QuotaError {
