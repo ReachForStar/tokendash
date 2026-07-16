@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { z } from 'zod';
 import type { DailyEntry, DailyResponse, ProjectsResponse, BlockEntry, BlocksResponse, ModelBreakdown } from '../shared/types.js';
-import { calculateCost } from './codexPricing.js';
+import { calculateCost, isLongContextCodexRequest } from './codexPricing.js';
 import { buildUsageFileIndex } from './usageFileIndex.js';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +40,11 @@ export interface ParsedTokenEvent {
   outputTokens: number;
   reasoningOutputTokens: number;
   totalTokens: number;
+  /** Cumulative total_token_usage identity used to merge overlapping files. */
+  usageSnapshotKey?: string;
+  longContextInputTokens?: number;
+  longContextCachedInputTokens?: number;
+  longContextOutputTokens?: number;
 }
 
 export interface ParsedSession {
@@ -64,6 +69,9 @@ interface TokenAccumulator {
   outputTokens: number;
   reasoningOutputTokens: number;
   totalTokens: number;
+  longContextInputTokens: number;
+  longContextCachedInputTokens: number;
+  longContextOutputTokens: number;
 }
 
 interface AggregateBucket {
@@ -71,8 +79,7 @@ interface AggregateBucket {
   models: Map<string, TokenAccumulator>;
 }
 
-const CODEX_INDEX_VERSION = 'codex-session-v1';
-const CODEX_AGGREGATE_INDEX_VERSION = 'codex-aggregate-v1';
+const CODEX_INDEX_VERSION = 'codex-session-v3';
 const DEFAULT_TZ = 'Asia/Shanghai';
 
 interface SerializedAggregateBucket {
@@ -106,6 +113,52 @@ function subtractTokenUsage(
   };
 }
 
+function usageSnapshotKey(usage: z.infer<typeof TokenUsageSchema>): string {
+  return [
+    usage.input_tokens,
+    usage.cached_input_tokens,
+    usage.output_tokens,
+    usage.reasoning_output_tokens,
+    usage.total_tokens,
+  ].join(':');
+}
+
+function sameUsage(a: ParsedTokenEvent, b: ParsedTokenEvent): boolean {
+  return a.inputTokens === b.inputTokens
+    && a.cachedInputTokens === b.cachedInputTokens
+    && a.outputTokens === b.outputTokens
+    && a.reasoningOutputTokens === b.reasoningOutputTokens
+    && a.totalTokens === b.totalTokens;
+}
+
+function chooseCodexUsageEvent(
+  lastUsage: z.infer<typeof TokenUsageSchema> | undefined,
+  totalUsage: z.infer<typeof TokenUsageSchema>,
+  previousTotalUsage: z.infer<typeof TokenUsageSchema> | null,
+): ParsedTokenEvent {
+  const deltaFromTotal = subtractTokenUsage(totalUsage, previousTotalUsage);
+  if (!lastUsage) return deltaFromTotal;
+
+  const lastEvent = subtractTokenUsage(lastUsage, null);
+  // Stable Codex logs expose last_token_usage as a per-request delta. Some
+  // GPT-5.6 logs instead mirror total_token_usage, which must be converted to
+  // a delta or every status snapshot will be counted again.
+  if (sameUsage(lastEvent, subtractTokenUsage(totalUsage, null)) && previousTotalUsage && totalUsage.total_tokens > previousTotalUsage.total_tokens) {
+    return deltaFromTotal;
+  }
+  return lastEvent;
+}
+
+function withLongContextUsage(ev: ParsedTokenEvent): ParsedTokenEvent {
+  if (!isLongContextCodexRequest(ev.inputTokens)) return ev;
+  return {
+    ...ev,
+    longContextInputTokens: ev.inputTokens,
+    longContextCachedInputTokens: ev.cachedInputTokens,
+    longContextOutputTokens: ev.outputTokens,
+  };
+}
+
 function displayInputTokens(inputTokens: number, cachedInputTokens: number): number {
   return Math.max(0, inputTokens - cachedInputTokens);
 }
@@ -116,6 +169,42 @@ function displayInputTokens(inputTokens: number, cachedInputTokens: number): num
 
 function getSessionsDir(): string {
   return join(homedir(), '.codex', 'sessions');
+}
+
+/**
+ * Codex subagent rollout files replay the parent history before appending the
+ * subagent's own events. ccusage identifies that replay by the repeated first
+ * token-count second; preserve the cumulative baseline but do not count it.
+ */
+function detectReplaySecond(content: string): string | null {
+  const prefix = content.slice(0, 16 * 1024);
+  if (!prefix.includes('thread_spawn') && !prefix.includes('forked_from_id')) return null;
+
+  let firstSecond: string | null = null;
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line) as Record<string, unknown>;
+      if (obj.type !== 'event_msg') continue;
+      const payload = (obj.payload as Record<string, unknown>) || {};
+      if (payload.type !== 'token_count') continue;
+      const info = (payload.info as Record<string, unknown>) || {};
+      if (!info.last_token_usage && !info.total_token_usage) continue;
+      const timestamp = (obj.timestamp as string) || '';
+      const second = timestamp.slice(0, 19);
+      if (!second) continue;
+      if (!firstSecond) {
+        firstSecond = second;
+      } else if (second === firstSecond) {
+        return firstSecond;
+      } else {
+        return null;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 export function isSessionsDirAccessible(): boolean {
@@ -187,6 +276,8 @@ export function parseCodexSession(filepath: string): ParsedSession | null {
   let previousTotalUsage: z.infer<typeof TokenUsageSchema> | null = null;
   const seenTotalUsageSnapshots = new Set<string>();
   const seenUsageEvents = new Set<string>();
+  const replaySecond = detectReplaySecond(content);
+  let skippingReplay = replaySecond !== null;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -228,35 +319,32 @@ export function parseCodexSession(filepath: string): ParsedSession | null {
         }
         const info = parseResult.data.info;
         if (!info) continue;
-        const totalUsageKey = [
-          info.total_token_usage.input_tokens,
-          info.total_token_usage.cached_input_tokens,
-          info.total_token_usage.output_tokens,
-          info.total_token_usage.reasoning_output_tokens,
-          info.total_token_usage.total_tokens,
-        ].join(':');
+        if (skippingReplay && timestamp.slice(0, 19) === replaySecond) {
+          previousTotalUsage = info.total_token_usage;
+          continue;
+        }
+        skippingReplay = false;
+        const totalUsageKey = usageSnapshotKey(info.total_token_usage);
         if (seenTotalUsageSnapshots.has(totalUsageKey)) continue;
         seenTotalUsageSnapshots.add(totalUsageKey);
 
-        const last = info.last_token_usage ?? info.total_token_usage;
-        const rawEvent = info.last_token_usage
-          ? subtractTokenUsage(last, null)
-          : subtractTokenUsage(last, previousTotalUsage);
+        const rawEvent = chooseCodexUsageEvent(info.last_token_usage, info.total_token_usage, previousTotalUsage);
         previousTotalUsage = info.total_token_usage;
 
         if (rawEvent.inputTokens === 0 && rawEvent.cachedInputTokens === 0 && rawEvent.outputTokens === 0 && rawEvent.reasoningOutputTokens === 0) {
           continue;
         }
 
-        const event = {
+        const event = withLongContextUsage({
           ...rawEvent,
           timestamp,
           model: currentModel || model || undefined,
+          usageSnapshotKey: totalUsageKey,
           cachedInputTokens: Math.min(rawEvent.cachedInputTokens, rawEvent.inputTokens),
-        };
+        });
         const eventKey = [
           timestamp,
-          model,
+          event.model || '',
           event.inputTokens,
           event.cachedInputTokens,
           event.outputTokens,
@@ -282,6 +370,46 @@ export function parseAllSessions(): ParsedSession[] {
   return loadIndexedSessions().sessions;
 }
 
+function fallbackEventKey(ev: ParsedTokenEvent): string {
+  return [
+    ev.timestamp,
+    ev.model || '',
+    ev.inputTokens,
+    ev.cachedInputTokens,
+    ev.outputTokens,
+    ev.reasoningOutputTokens,
+    ev.totalTokens,
+  ].join(':');
+}
+
+/** Merge rollout files that contain overlapping snapshots of the same session. */
+export function deduplicateParsedSessions(sessions: ParsedSession[]): ParsedSession[] {
+  const merged = new Map<string, { session: ParsedSession; seenEvents: Set<string> }>();
+
+  for (const session of sessions) {
+    let target = merged.get(session.id);
+    if (!target) {
+      target = {
+        session: { ...session, tokenEvents: [] },
+        seenEvents: new Set(),
+      };
+      merged.set(session.id, target);
+    }
+
+    for (const event of session.tokenEvents) {
+      const key = event.usageSnapshotKey || fallbackEventKey(event);
+      if (target.seenEvents.has(key)) continue;
+      target.seenEvents.add(key);
+      target.session.tokenEvents.push(event);
+    }
+  }
+
+  return [...merged.values()].map(({ session }) => ({
+    ...session,
+    tokenEvents: session.tokenEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp)),
+  }));
+}
+
 function loadIndexedSessions(): { sessions: ParsedSession[]; signature: string } {
   const result = buildUsageFileIndex<ParsedSession | null, { path: string }>({
     cacheName: 'codex-sessions',
@@ -290,7 +418,7 @@ function loadIndexedSessions(): { sessions: ParsedSession[]; signature: string }
     parseFile: file => parseCodexSession(file.path),
   });
   return {
-    sessions: result.values.filter((session): session is ParsedSession => session !== null),
+    sessions: deduplicateParsedSessions(result.values.filter((session): session is ParsedSession => session !== null)),
     signature: result.signature,
   };
 }
@@ -319,15 +447,12 @@ function summarizeCodexSession(session: ParsedSession | null): CodexFileAggregat
 }
 
 function loadIndexedAggregates(): { summaries: CodexFileAggregate[]; signature: string } {
-  const result = buildUsageFileIndex<CodexFileAggregate | null, { path: string }>({
-    cacheName: 'codex-aggregates',
-    parserVersion: CODEX_AGGREGATE_INDEX_VERSION,
-    files: scanCodexSessions().map(path => ({ path })),
-    parseFile: file => summarizeCodexSession(parseCodexSession(file.path)),
-  });
+  const { sessions, signature } = loadIndexedSessions();
   return {
-    summaries: result.values.filter((summary): summary is CodexFileAggregate => summary !== null),
-    signature: result.signature,
+    summaries: sessions
+      .map(session => summarizeCodexSession(session))
+      .filter((summary): summary is CodexFileAggregate => summary !== null),
+    signature,
   };
 }
 
@@ -377,7 +502,16 @@ function extractProjectName(cwd: string): string {
 // ---------------------------------------------------------------------------
 
 function emptyAcc(): TokenAccumulator {
-  return { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 };
+  return {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 0,
+    longContextInputTokens: 0,
+    longContextCachedInputTokens: 0,
+    longContextOutputTokens: 0,
+  };
 }
 
 function addAcc(a: TokenAccumulator, ev: ParsedTokenEvent): void {
@@ -386,6 +520,9 @@ function addAcc(a: TokenAccumulator, ev: ParsedTokenEvent): void {
   a.outputTokens += ev.outputTokens;
   a.reasoningOutputTokens += ev.reasoningOutputTokens;
   a.totalTokens += ev.totalTokens;
+  a.longContextInputTokens += ev.longContextInputTokens ?? 0;
+  a.longContextCachedInputTokens += ev.longContextCachedInputTokens ?? 0;
+  a.longContextOutputTokens += ev.longContextOutputTokens ?? 0;
 }
 
 function displayAcc(acc: TokenAccumulator): TokenAccumulator {
@@ -401,6 +538,9 @@ function mergeAcc(a: TokenAccumulator, b: TokenAccumulator): void {
   a.outputTokens += b.outputTokens;
   a.reasoningOutputTokens += b.reasoningOutputTokens;
   a.totalTokens += b.totalTokens;
+  a.longContextInputTokens += b.longContextInputTokens ?? 0;
+  a.longContextCachedInputTokens += b.longContextCachedInputTokens ?? 0;
+  a.longContextOutputTokens += b.longContextOutputTokens ?? 0;
 }
 
 function addAccToBucket(bucket: AggregateBucket, ev: ParsedTokenEvent, model: string): void {

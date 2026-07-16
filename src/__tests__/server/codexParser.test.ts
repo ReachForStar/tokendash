@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, afterEach } from 'vitest';
-import { buildCodexResponsesFromSessions, parseCodexSession, type ParsedSession } from '../../server/codexParser.js';
+import { buildCodexResponsesFromSessions, deduplicateParsedSessions, parseCodexSession, type ParsedSession } from '../../server/codexParser.js';
 import { calculateCost } from '../../server/codexPricing.js';
 import type { DailyEntry, Totals } from '../../shared/types.js';
 
@@ -116,7 +116,7 @@ describe('parseCodexSession', () => {
     const session = parseCodexSession(filepath);
 
     expect(session?.tokenEvents).toHaveLength(2);
-    expect(session?.tokenEvents.map(ev => ev.totalTokens)).toEqual([1500, 2100]);
+    expect(session?.tokenEvents.map(ev => ev.totalTokens)).toEqual([1500, 600]);
   });
 
   it('derives per-turn usage from cumulative total_token_usage when last_token_usage is missing', () => {
@@ -138,6 +138,49 @@ describe('parseCodexSession', () => {
     expect(session?.tokenEvents).toHaveLength(2);
     expect(session?.tokenEvents[0]).toMatchObject({ inputTokens: 100, outputTokens: 50, totalTokens: 150 });
     expect(session?.tokenEvents[1]).toMatchObject({ inputTokens: 100, outputTokens: 25, totalTokens: 125 });
+  });
+
+  it('does not sum cumulative last_token_usage snapshots for GPT-5.6', () => {
+    const filepath = writeSession([
+      {
+        type: 'session_meta',
+        payload: {
+          id: 'session-gpt-56',
+          cwd: '/tmp/project',
+          timestamp: '2026-05-18T00:00:00.000Z',
+        },
+      },
+      turnContext('gpt-5.6-sol'),
+      tokenCount('2026-05-18T00:00:01.000Z', 150, 50),
+      tokenCount('2026-05-18T00:00:02.000Z', 275, 75),
+      tokenCount('2026-05-18T00:00:03.000Z', 550, 150),
+    ]);
+
+    const parsed = parseCodexSession(filepath);
+
+    expect(parsed?.tokenEvents.map(ev => ev.totalTokens)).toEqual([150, 125, 275]);
+    expect(parsed?.tokenEvents.reduce((sum, ev) => sum + ev.totalTokens, 0)).toBe(550);
+  });
+
+  it('skips replayed subagent history before counting its own rollout', () => {
+    const filepath = writeSession([
+      {
+        type: 'session_meta',
+        payload: {
+          id: 'subagent-1',
+          cwd: '/tmp/project',
+          timestamp: '2026-05-18T00:00:00.000Z',
+          source: { subagent: { thread_spawn: { parent_thread_id: 'parent-1' } } },
+        },
+      },
+      tokenCount('2026-05-18T00:00:01.000Z', 100),
+      tokenCount('2026-05-18T00:00:01.000Z', 200),
+      tokenCount('2026-05-18T00:00:02.000Z', 300),
+    ]);
+
+    const parsed = parseCodexSession(filepath);
+
+    expect(parsed?.tokenEvents.map(ev => ev.totalTokens)).toEqual([100]);
   });
 
   it('attributes token events to the active model when a session switches models', () => {
@@ -269,6 +312,24 @@ describe('buildCodexResponsesFromSessions', () => {
   });
 });
 
+describe('Codex session merging', () => {
+  it('merges overlapping rollout files by cumulative usage snapshot', () => {
+    const first = session('overlap', '/repo/project-a', 'gpt-5.6-terra', [
+      { ...event('2026-07-10T01:00:00.000Z', 100, 10), usageSnapshotKey: '100:0:10:0:110' },
+      { ...event('2026-07-10T01:01:00.000Z', 200, 20), usageSnapshotKey: '300:0:30:0:330' },
+    ]);
+    const overlapping = session('overlap', '/repo/project-a', 'gpt-5.6-terra', [
+      { ...event('2026-07-10T01:00:05.000Z', 100, 10), usageSnapshotKey: '100:0:10:0:110' },
+      { ...event('2026-07-10T01:02:00.000Z', 400, 40), usageSnapshotKey: '700:0:70:0:770' },
+    ]);
+
+    const merged = deduplicateParsedSessions([first, overlapping]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].tokenEvents.map(ev => ev.totalTokens)).toEqual([110, 220, 440]);
+  });
+});
+
 describe('Codex pricing', () => {
   it('prices gpt-5.5 at twice the gpt-5.4 rate across input, cached input, and output', () => {
     const tokens = {
@@ -285,5 +346,33 @@ describe('Codex pricing', () => {
     expect(gpt54).toBeCloseTo(16.375, 6);
     expect(gpt55).toBeCloseTo(32.75, 6);
     expect(gpt55).toBeCloseTo(gpt54 * 2, 6);
+  });
+
+  it('normalizes GPT-5.6 aliases and date suffixes to Sol pricing', () => {
+    const tokens = {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 500_000,
+      outputTokens: 1_000_000,
+      reasoningOutputTokens: 0,
+      totalTokens: 2_000_000,
+    };
+
+    expect(calculateCost(tokens, new Set(['gpt-5.6']))).toBeCloseTo(32.75, 6);
+    expect(calculateCost(tokens, new Set(['gpt-5.6-sol-2026-07-15']))).toBeCloseTo(32.75, 6);
+  });
+
+  it('applies GPT-5.6 long-context rates to the individual request portion', () => {
+    const tokens = {
+      inputTokens: 380_000,
+      cachedInputTokens: 70_000,
+      outputTokens: 800,
+      reasoningOutputTokens: 0,
+      totalTokens: 380_800,
+      longContextInputTokens: 280_000,
+      longContextCachedInputTokens: 20_000,
+      longContextOutputTokens: 500,
+    };
+
+    expect(calculateCost(tokens, new Set(['gpt-5.6-sol']))).toBeCloseTo(2.9265, 6);
   });
 });
