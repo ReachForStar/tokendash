@@ -183,6 +183,56 @@ describe('parseCodexSession', () => {
     expect(parsed?.tokenEvents.map(ev => ev.totalTokens)).toEqual([100]);
   });
 
+  it('skips fork replay batches identified by fork metadata', () => {
+    const forkTime = '2026-07-17T13:32:31.000Z';
+    const filepath = writeSession([
+      {
+        type: 'session_meta',
+        payload: {
+          id: 'fork-session',
+          cwd: '/tmp/project',
+          timestamp: forkTime,
+          forked_from_id: 'parent-session',
+        },
+      },
+      turnContext('gpt-5.5'),
+      tokenCount(forkTime, 50_000),
+      tokenCount(`${forkTime.slice(0, -5)}001Z`, 60_000),
+      tokenCount(`${forkTime.slice(0, -5)}002Z`, 70_000),
+      tokenCount(`${forkTime.slice(0, -5)}003Z`, 80_000),
+      tokenCount(`${forkTime.slice(0, -5)}004Z`, 90_000),
+      tokenCount(`${forkTime.slice(0, -5)}005Z`, 100_000),
+      tokenCount('2026-07-17T13:45:00.000Z', 110_000),
+    ]);
+
+    const parsed = parseCodexSession(filepath);
+
+    expect(parsed?.tokenEvents).toHaveLength(1);
+    expect(parsed?.tokenEvents[0].timestamp).toBe('2026-07-17T13:45:00.000Z');
+  });
+
+  it('does not filter normal sessions with spread-out timestamps', () => {
+    const filepath = writeSession([
+      {
+        type: 'session_meta',
+        payload: {
+          id: 'normal-session',
+          cwd: '/tmp/project',
+          timestamp: '2026-07-17T00:00:00.000Z',
+        },
+      },
+      turnContext('gpt-5.5'),
+      tokenCount('2026-07-17T00:00:01.000Z', 1_500),
+      tokenCount('2026-07-17T00:00:05.000Z', 2_100),
+      tokenCount('2026-07-17T00:00:10.000Z', 2_800),
+      tokenCount('2026-07-17T00:00:15.000Z', 3_500),
+    ]);
+
+    const parsed = parseCodexSession(filepath);
+
+    expect(parsed?.tokenEvents).toHaveLength(4);
+  });
+
   it('attributes token events to the active model when a session switches models', () => {
     const filepath = writeSession([
       {
