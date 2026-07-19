@@ -46,24 +46,24 @@ func drawCentered(_ text: String, centerX: CGFloat, y: CGFloat, attributes: [NSA
     rendered.draw(at: NSPoint(x: centerX - textSize.width / 2, y: y), withAttributes: attributes)
 }
 
-drawCentered("Install TokenDash", centerX: 475, y: 585, attributes: titleAttributes)
-drawCentered("Drag the app to Applications to finish installation", centerX: 475, y: 550, attributes: subtitleAttributes)
+drawCentered("Install TokenDash", centerX: 444, y: 654, attributes: titleAttributes)
+drawCentered("Drag the app to Applications to finish installation", centerX: 444, y: 622, attributes: subtitleAttributes)
 
 let accent = NSColor(calibratedRed: 0.16, green: 0.48, blue: 0.34, alpha: 1)
 accent.setStroke()
 let arrow = NSBezierPath()
 arrow.lineWidth = 4
 arrow.lineCapStyle = .round
-arrow.move(to: NSPoint(x: 365, y: 440))
-arrow.line(to: NSPoint(x: 575, y: 440))
+arrow.move(to: NSPoint(x: 335, y: 510))
+arrow.line(to: NSPoint(x: 535, y: 510))
 arrow.stroke()
 
 let arrowHead = NSBezierPath()
 arrowHead.lineWidth = 3
 arrowHead.lineCapStyle = .round
-arrowHead.move(to: NSPoint(x: 558, y: 452))
-arrowHead.line(to: NSPoint(x: 592, y: 440))
-arrowHead.line(to: NSPoint(x: 558, y: 428))
+arrowHead.move(to: NSPoint(x: 515, y: 522))
+arrowHead.line(to: NSPoint(x: 555, y: 510))
+arrowHead.line(to: NSPoint(x: 515, y: 498))
 arrowHead.stroke()
 
 let footerAttributes: [NSAttributedString.Key: Any] = [

@@ -76,14 +76,14 @@ on run argv
         set current view of dmgWindow to icon view
         set toolbar visible of dmgWindow to false
         set statusbar visible of dmgWindow to false
-        set bounds of dmgWindow to {120, 120, 1000, 600}
+        set bounds of dmgWindow to {120, 120, 1000, 550}
         set iconView to icon view options of dmgWindow
         set arrangement of iconView to not arranged
         set icon size of iconView to 128
         set text size of iconView to 16
         set background picture of iconView to backgroundFile
-        set position of item "TokenDash.app" of dmgFolder to {300, 300}
-        set position of item "Applications" of dmgFolder to {660, 300}
+        set position of item "TokenDash.app" of dmgFolder to {262, 250}
+        set position of item "Applications" of dmgFolder to {618, 250}
         update dmgFolder without registering applications
         delay 1
         close dmgWindow
