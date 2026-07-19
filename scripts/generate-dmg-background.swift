@@ -32,39 +32,45 @@ NSColor(calibratedRed: 0.97, green: 0.965, blue: 0.94, alpha: 1).setFill()
 NSRect(origin: .zero, size: size).fill()
 
 let titleAttributes: [NSAttributedString.Key: Any] = [
-    .font: NSFont.systemFont(ofSize: 34, weight: .semibold),
+    .font: NSFont.systemFont(ofSize: 32, weight: .semibold),
     .foregroundColor: NSColor(calibratedRed: 0.12, green: 0.17, blue: 0.14, alpha: 1),
 ]
 let subtitleAttributes: [NSAttributedString.Key: Any] = [
-    .font: NSFont.systemFont(ofSize: 18, weight: .regular),
-    .foregroundColor: NSColor(calibratedRed: 0.31, green: 0.37, blue: 0.33, alpha: 1),
+    .font: NSFont.systemFont(ofSize: 20, weight: .medium),
+    .foregroundColor: NSColor(calibratedRed: 0.27, green: 0.34, blue: 0.30, alpha: 1),
 ]
 
-NSString(string: "Install TokenDash").draw(at: NSPoint(x: 94, y: 650), withAttributes: titleAttributes)
-NSString(string: "Drag the app to Applications to finish installation").draw(at: NSPoint(x: 96, y: 615), withAttributes: subtitleAttributes)
+func drawCentered(_ text: String, centerX: CGFloat, y: CGFloat, attributes: [NSAttributedString.Key: Any]) {
+    let rendered = NSString(string: text)
+    let textSize = rendered.size(withAttributes: attributes)
+    rendered.draw(at: NSPoint(x: centerX - textSize.width / 2, y: y), withAttributes: attributes)
+}
+
+drawCentered("Install TokenDash", centerX: 475, y: 585, attributes: titleAttributes)
+drawCentered("Drag the app to Applications to finish installation", centerX: 475, y: 550, attributes: subtitleAttributes)
 
 let accent = NSColor(calibratedRed: 0.16, green: 0.48, blue: 0.34, alpha: 1)
 accent.setStroke()
 let arrow = NSBezierPath()
-arrow.lineWidth = 5
+arrow.lineWidth = 4
 arrow.lineCapStyle = .round
-arrow.move(to: NSPoint(x: 350, y: 350))
-arrow.curve(to: NSPoint(x: 630, y: 350), controlPoint1: NSPoint(x: 430, y: 405), controlPoint2: NSPoint(x: 550, y: 405))
+arrow.move(to: NSPoint(x: 365, y: 440))
+arrow.line(to: NSPoint(x: 575, y: 440))
 arrow.stroke()
 
 let arrowHead = NSBezierPath()
-arrowHead.lineWidth = 5
+arrowHead.lineWidth = 3
 arrowHead.lineCapStyle = .round
-arrowHead.move(to: NSPoint(x: 600, y: 375))
-arrowHead.line(to: NSPoint(x: 640, y: 350))
-arrowHead.line(to: NSPoint(x: 600, y: 325))
+arrowHead.move(to: NSPoint(x: 558, y: 452))
+arrowHead.line(to: NSPoint(x: 592, y: 440))
+arrowHead.line(to: NSPoint(x: 558, y: 428))
 arrowHead.stroke()
 
 let footerAttributes: [NSAttributedString.Key: Any] = [
     .font: NSFont.systemFont(ofSize: 15, weight: .medium),
     .foregroundColor: NSColor(calibratedRed: 0.43, green: 0.48, blue: 0.44, alpha: 1),
 ]
-NSString(string: "You can close this window after copying TokenDash").draw(at: NSPoint(x: 96, y: 72), withAttributes: footerAttributes)
+drawCentered("1. Drag TokenDash to Applications", centerX: 475, y: 68, attributes: footerAttributes)
 
 guard let png = bitmap.representation(using: .png, properties: [:]) else {
     fputs("Unable to encode DMG background PNG\n", stderr)
