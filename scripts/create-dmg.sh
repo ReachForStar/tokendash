@@ -76,7 +76,7 @@ on run argv
         set current view of dmgWindow to icon view
         set toolbar visible of dmgWindow to false
         set statusbar visible of dmgWindow to false
-        set bounds of dmgWindow to {120, 120, 1020, 720}
+        set bounds of dmgWindow to {120, 120, 1020, 680}
         set iconView to icon view options of dmgWindow
         set arrangement of iconView to not arranged
         set icon size of iconView to 128

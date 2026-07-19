@@ -48,16 +48,16 @@ accent.setStroke()
 let arrow = NSBezierPath()
 arrow.lineWidth = 5
 arrow.lineCapStyle = .round
-arrow.move(to: NSPoint(x: 480, y: 350))
-arrow.curve(to: NSPoint(x: 710, y: 350), controlPoint1: NSPoint(x: 540, y: 410), controlPoint2: NSPoint(x: 650, y: 410))
+arrow.move(to: NSPoint(x: 350, y: 350))
+arrow.curve(to: NSPoint(x: 630, y: 350), controlPoint1: NSPoint(x: 430, y: 405), controlPoint2: NSPoint(x: 550, y: 405))
 arrow.stroke()
 
 let arrowHead = NSBezierPath()
 arrowHead.lineWidth = 5
 arrowHead.lineCapStyle = .round
-arrowHead.move(to: NSPoint(x: 690, y: 375))
-arrowHead.line(to: NSPoint(x: 720, y: 350))
-arrowHead.line(to: NSPoint(x: 690, y: 325))
+arrowHead.move(to: NSPoint(x: 600, y: 375))
+arrowHead.line(to: NSPoint(x: 640, y: 350))
+arrowHead.line(to: NSPoint(x: 600, y: 325))
 arrowHead.stroke()
 
 let footerAttributes: [NSAttributedString.Key: Any] = [
