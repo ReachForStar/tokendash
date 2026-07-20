@@ -36,6 +36,7 @@ import AppKit
     private var dormantTimer: Timer?
     private var pulseTimer: Timer?
     private var backgroundFullTimer: Timer?
+    private var pendingFreshPopoverRefresh = false
 
     private var activeAgents: [String] = []
     private var isPulseSampling = false
@@ -178,7 +179,10 @@ import AppKit
     /// regardless of whether it came from a manual click, the background timer,
     /// or a previous popover open.
     func refreshOnPopoverOpenIfNeeded() async -> Bool {
-        guard !state.isRefreshing else { return false }
+        if state.isRefreshing {
+            pendingFreshPopoverRefresh = true
+            return false
+        }
         let currentTime = now()
         if let lastUpdatedAt = state.lastUpdatedAt,
            currentTime.timeIntervalSince(lastUpdatedAt) < popoverRefreshInterval {
@@ -241,6 +245,12 @@ import AppKit
         defer {
             state.isLoading = false
             state.isRefreshing = false
+            if forceRefresh {
+                pendingFreshPopoverRefresh = false
+            } else if pendingFreshPopoverRefresh && mode == .active {
+                pendingFreshPopoverRefresh = false
+                Task { await self.refreshOnPopoverOpenIfNeeded() }
+            }
         }
         do {
             let agentsResp = try await api.getAgents()
@@ -318,7 +328,14 @@ import AppKit
             } else {
                 Task { await self.refreshQuota(force: false) }
             }
-            self.state.lastUpdatedAt = now()
+            // Only a cache-bypassing detail refresh proves the popover is fresh.
+            // The launch warm-up intentionally uses refresh=false and may be
+            // served from the daemon's stale disk cache; recording it here would
+            // suppress the first popover-open refresh and leave the menu showing
+            // zeroes until the next background/manual refresh.
+            if forceRefresh {
+                self.state.lastUpdatedAt = now()
+            }
         } catch {
             NSLog("[TokenDash] full update error: \(error.localizedDescription)")
             self.state.errorMessage = error.localizedDescription

@@ -56,6 +56,63 @@ final class BadgeUpdaterModeTests: XCTestCase {
         XCTAssertFalse(state.isRefreshing, "手动刷新完成后必须退出 loading 状态")
     }
 
+    func testCacheServedLaunchPrimeDoesNotThrottleFirstPopoverRefresh() async throws {
+        let state = AppState()
+        let mock = MockAPIClient()
+        var now = Date(timeIntervalSinceReferenceDate: 1_000)
+        let updater = BadgeUpdater(
+            state: state,
+            client: mock,
+            now: { now },
+            popoverRefreshInterval: 30 * 60
+        )
+
+        await updater.performFullUpdate(forceRefresh: false, forceQuota: false)
+        let launchCounts = await mock.snapshot()
+        let launchDailyRefresh = await mock.lastDailyRefresh
+        XCTAssertEqual(launchDailyRefresh, false, "launch warm-up must stay cache-served")
+        XCTAssertNil(state.lastUpdatedAt, "cache-served launch warm-up must not start the popover fresh-data throttle")
+
+        now.addTimeInterval(60)
+        let refreshedOnOpen = await updater.refreshOnPopoverOpenIfNeeded()
+
+        XCTAssertTrue(refreshedOnOpen, "the first popover open after launch must still bypass stale daemon caches")
+        let openedCounts = await mock.snapshot()
+        XCTAssertGreaterThan(openedCounts.daily, launchCounts.daily)
+        XCTAssertGreaterThan(openedCounts.blocks, launchCounts.blocks)
+        XCTAssertGreaterThan(openedCounts.projects, launchCounts.projects)
+        let openDailyRefresh = await mock.lastDailyRefresh
+        XCTAssertEqual(openDailyRefresh, true, "popover open must force a fresh detail refresh after cache-served launch warm-up")
+        XCTAssertNotNil(state.lastUpdatedAt, "fresh popover refresh should record the throttle timestamp")
+    }
+
+    func testPopoverOpenDuringLaunchWarmupQueuesFreshRefresh() async throws {
+        let state = AppState()
+        let mock = BlockingAPIClient()
+        let updater = BadgeUpdater(
+            state: state,
+            client: mock,
+            popoverRefreshInterval: 30 * 60
+        )
+
+        let launchTask = Task { await updater.performFullUpdate(forceRefresh: false, forceQuota: false) }
+        await mock.waitUntilFirstDailyIsBlocked()
+        updater.setMode(.active)
+
+        let refreshedImmediately = await updater.refreshOnPopoverOpenIfNeeded()
+        XCTAssertFalse(refreshedImmediately, "an in-flight launch warm-up cannot be interrupted synchronously")
+
+        await mock.releaseFirstDaily()
+        await launchTask.value
+        try await waitUntil {
+            await mock.dailyCallCount >= 2
+        }
+
+        let lastDailyRefresh = await mock.lastDailyRefresh
+        XCTAssertEqual(lastDailyRefresh, true, "active popover open during cache-served launch warm-up must queue a fresh refresh")
+        XCTAssertNotNil(state.lastUpdatedAt, "queued fresh refresh should record the throttle timestamp")
+    }
+
     func testPopoverRefreshIsThrottledForThirtyMinutes() async throws {
         let state = AppState()
         let mock = MockAPIClient()
@@ -176,5 +233,68 @@ actor MockAPIClient: APIClientProtocol {
         quota += 1
         lastQuotaRefresh = refresh
         return QuotaResponse(providers: [])
+    }
+}
+
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    condition: @escaping () async -> Bool
+) async throws {
+    let start = DispatchTime.now().uptimeNanoseconds
+    while DispatchTime.now().uptimeNanoseconds - start < timeoutNanoseconds {
+        if await condition() { return }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTFail("Timed out waiting for async condition")
+}
+
+actor BlockingAPIClient: APIClientProtocol {
+    private(set) var dailyCallCount = 0
+    private(set) var lastDailyRefresh: Bool? = nil
+    private var shouldBlockFirstDaily = true
+    private var firstDailyContinuation: CheckedContinuation<Void, Never>?
+    private var blockedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitUntilFirstDailyIsBlocked() async {
+        if firstDailyContinuation != nil { return }
+        await withCheckedContinuation { continuation in
+            blockedWaiters.append(continuation)
+        }
+    }
+
+    func releaseFirstDaily() {
+        firstDailyContinuation?.resume()
+        firstDailyContinuation = nil
+    }
+
+    func getAgents() async throws -> AgentsResponse {
+        AgentsResponse(available: ["claude"], default: "claude")
+    }
+
+    func getDaily(agent: String, refresh: Bool) async throws -> DailyResponse {
+        dailyCallCount += 1
+        lastDailyRefresh = refresh
+        if shouldBlockFirstDaily {
+            shouldBlockFirstDaily = false
+            await withCheckedContinuation { continuation in
+                firstDailyContinuation = continuation
+                let waiters = blockedWaiters
+                blockedWaiters.removeAll()
+                waiters.forEach { $0.resume() }
+            }
+        }
+        return DailyResponse(daily: [])
+    }
+
+    func getBlocks(agent: String, refresh: Bool) async throws -> BlocksResponse {
+        BlocksResponse(blocks: [])
+    }
+
+    func getProjects(agent: String, refresh: Bool) async throws -> ProjectsResponse {
+        ProjectsResponse(projects: [:])
+    }
+
+    func getQuota(refresh: Bool) async throws -> QuotaResponse {
+        QuotaResponse(providers: [])
     }
 }
