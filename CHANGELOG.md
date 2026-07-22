@@ -1,5 +1,8 @@
 # Changelog
 
+### v1.8.6
+- **Keep Codex usage stable after archiving** — include `~/.codex/archived_sessions` alongside live `~/.codex/sessions` when building Codex usage totals, so today/month totals do not drop after Codex moves completed transcripts into the archive.
+
 ### v1.8.5
 - **Correct Codex GPT-5.6 usage accounting** — normalize GPT-5.6 aliases and date-suffixed model names, apply long-context pricing per request, and remove replayed subagent history that could inflate usage totals.
 - **Clearer macOS installation guidance** — ship a compact, centered Finder drag-to-Applications layout with a visible installation instruction and aligned drag arrow.
