@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { formatTokens, formatUSD, formatPercent, formatProjectName } from '../../client/utils/formatters.js';
 
 describe('formatTokens', () => {
+  it('formats billions with B suffix instead of 1000M', () => {
+    expect(formatTokens(1_000_000_000)).toBe('1B');
+    expect(formatTokens(1_500_000_000)).toBe('1.5B');
+    expect(formatTokens(2_000_000_000)).toBe('2B');
+  });
+
   it('formats millions with M suffix', () => {
     expect(formatTokens(1_500_000)).toBe('1.5M');
     expect(formatTokens(2_000_000)).toBe('2.0M');

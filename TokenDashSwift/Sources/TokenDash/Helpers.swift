@@ -33,6 +33,7 @@ extension Color {
 // MARK: - Number formatting
 
 func formatTokens(_ tokens: Int) -> String {
+    if tokens >= 1_000_000_000 { return trimTrailingZero(String(format: "%.1f", Double(tokens) / 1_000_000_000)) + "B" }
     if tokens >= 1_000_000 { return String(format: "%.1fM", Double(tokens) / 1_000_000) }
     if tokens >= 1_000 { return String(format: "%.1fK", Double(tokens) / 1_000) }
     if tokens > 0 { return String(tokens) }

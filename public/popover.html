@@ -937,6 +937,7 @@
 
     function formatNumber(n) {
       if (!Number.isFinite(n) || n <= 0) return '0';
+      if (n >= 1e9) return trimTrailingZero((n / 1e9).toFixed(n >= 10e9 ? 1 : 2)) + 'B';
       if (n >= 1e6) return trimTrailingZero((n / 1e6).toFixed(n >= 10e6 ? 1 : 2)) + 'M';
       if (n >= 1e3) return trimTrailingZero((n / 1e3).toFixed(n >= 100e3 ? 0 : 1)) + 'K';
       return String(Math.round(n));
