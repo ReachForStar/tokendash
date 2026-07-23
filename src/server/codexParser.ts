@@ -79,7 +79,7 @@ interface AggregateBucket {
   models: Map<string, TokenAccumulator>;
 }
 
-const CODEX_INDEX_VERSION = 'codex-session-v3';
+const CODEX_INDEX_VERSION = 'codex-session-v4';
 const DEFAULT_TZ = 'Asia/Shanghai';
 
 interface SerializedAggregateBucket {
@@ -167,8 +167,18 @@ function displayInputTokens(inputTokens: number, cachedInputTokens: number): num
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getSessionsDir(): string {
-  return join(homedir(), '.codex', 'sessions');
+/** Resolve the Codex data root from CODEX_HOME, falling back to ~/.codex. */
+function getCodexHome(): string {
+  return process.env.CODEX_HOME || join(homedir(), '.codex');
+}
+
+/** Return every Codex transcript directory whose JSONL usage should be counted. */
+function getSessionDirs(): string[] {
+  const codexHome = getCodexHome();
+  return [
+    join(codexHome, 'sessions'),
+    join(codexHome, 'archived_sessions'),
+  ];
 }
 
 /**
@@ -208,19 +218,22 @@ function detectReplaySecond(content: string): string | null {
 }
 
 export function isSessionsDirAccessible(): boolean {
-  try {
-    accessSync(getSessionsDir(), constants.R_OK);
-    return true;
-  } catch {
-    return false;
-  }
+  return getSessionDirs().some(dir => {
+    try {
+      accessSync(dir, constants.R_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
- * Recursively find all .jsonl files under ~/.codex/sessions/
+ * Recursively find all .jsonl files under the live and archived Codex session
+ * directories. Codex moves completed transcripts to archived_sessions, but
+ * usage history must remain cumulative after that lifecycle transition.
  */
 export function scanCodexSessions(): string[] {
-  const sessionsDir = getSessionsDir();
   const results: string[] = [];
 
   function walk(dir: string): void {
@@ -246,7 +259,9 @@ export function scanCodexSessions(): string[] {
     }
   }
 
-  walk(sessionsDir);
+  for (const dir of getSessionDirs()) {
+    walk(dir);
+  }
   return results.sort();
 }
 

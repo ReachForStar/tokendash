@@ -1,14 +1,20 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, afterEach } from 'vitest';
-import { buildCodexResponsesFromSessions, deduplicateParsedSessions, parseCodexSession, type ParsedSession } from '../../server/codexParser.js';
+import { buildCodexResponsesFromSessions, deduplicateParsedSessions, parseCodexSession, scanCodexSessions, type ParsedSession } from '../../server/codexParser.js';
 import { calculateCost } from '../../server/codexPricing.js';
 import type { DailyEntry, Totals } from '../../shared/types.js';
 
 const tempDirs: string[] = [];
+const originalCodexHome = process.env.CODEX_HOME;
 
 afterEach(() => {
+  if (originalCodexHome === undefined) {
+    delete process.env.CODEX_HOME;
+  } else {
+    process.env.CODEX_HOME = originalCodexHome;
+  }
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -96,6 +102,27 @@ function sumDaily(entries: DailyEntry[]): Totals {
     totalCost: acc.totalCost + entry.totalCost,
   }), { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, totalCost: 0 });
 }
+
+describe('scanCodexSessions', () => {
+  it('keeps archived Codex sessions in the usage source set', () => {
+    const codexHome = mkdtempSync(join(tmpdir(), 'tokendash-codex-home-'));
+    tempDirs.push(codexHome);
+    process.env.CODEX_HOME = codexHome;
+
+    const liveDir = join(codexHome, 'sessions', '2026', '07', '22');
+    const archivedDir = join(codexHome, 'archived_sessions');
+    mkdirSync(liveDir, { recursive: true });
+    mkdirSync(archivedDir, { recursive: true });
+
+    const liveSession = join(liveDir, 'rollout-live.jsonl');
+    const archivedSession = join(archivedDir, 'rollout-archived.jsonl');
+    writeFileSync(liveSession, '');
+    writeFileSync(archivedSession, '');
+    writeFileSync(join(archivedDir, 'ignored.txt'), 'not a session');
+
+    expect(scanCodexSessions()).toEqual([archivedSession, liveSession]);
+  });
+});
 
 describe('parseCodexSession', () => {
   it('deduplicates repeated token_count snapshots within a Codex session', () => {
