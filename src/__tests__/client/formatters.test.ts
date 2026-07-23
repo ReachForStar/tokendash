@@ -6,6 +6,7 @@ describe('formatTokens', () => {
     expect(formatTokens(1_000_000_000)).toBe('1B');
     expect(formatTokens(1_500_000_000)).toBe('1.5B');
     expect(formatTokens(2_000_000_000)).toBe('2B');
+    expect(formatTokens(999_950_000)).toBe('1B');
   });
 
   it('formats millions with M suffix', () => {
