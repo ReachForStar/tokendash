@@ -105,7 +105,7 @@ final class BadgeUpdaterModeTests: XCTestCase {
         await mock.releaseFirstDaily()
         await launchTask.value
         try await waitUntil {
-            await mock.dailyCallCount >= 2
+            await mock.dailyCallCount >= 2 && state.lastUpdatedAt != nil
         }
 
         let lastDailyRefresh = await mock.lastDailyRefresh
