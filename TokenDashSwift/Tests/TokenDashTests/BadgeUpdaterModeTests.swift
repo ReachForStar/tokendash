@@ -4,9 +4,9 @@ import XCTest
 @MainActor
 final class BadgeUpdaterModeTests: XCTestCase {
 
-    // MARK: - dormant: badge 更新只拉 daily，不拉 blocks/projects/quota
+    // MARK: - dormant: badge 更新只强刷 daily，不拉 blocks/projects/quota
 
-    func testDormantPerformBadgeUpdateSkipsBlocksProjectsQuota() async throws {
+    func testDormantPerformBadgeUpdateForceRefreshesDailyButSkipsBlocksProjectsQuota() async throws {
         let state = AppState()
         let mock = MockAPIClient()
         let updater = BadgeUpdater(state: state, client: mock)
@@ -15,6 +15,8 @@ final class BadgeUpdaterModeTests: XCTestCase {
 
         let counts = await mock.snapshot()
         XCTAssertGreaterThan(counts.daily, 0, "dormant badge 更新必须拉 daily")
+        let lastDailyRefresh = await mock.lastDailyRefresh
+        XCTAssertEqual(lastDailyRefresh, true, "菜单栏 token 数必须绕过 daemon 响应缓存，否则 coding agent 使用中会停住")
         XCTAssertEqual(counts.blocks, 0, "dormant 不得拉 blocks")
         XCTAssertEqual(counts.projects, 0, "dormant 不得拉 projects")
         XCTAssertEqual(counts.quota, 0, "dormant 不得拉 quota")
@@ -39,6 +41,28 @@ final class BadgeUpdaterModeTests: XCTestCase {
         XCTAssertGreaterThan(counts.quota, 0, "active 详情刷新最终要拉 quota（异步）")
         let lastQuotaRefresh = await mock.lastQuotaRefresh
         XCTAssertEqual(lastQuotaRefresh, false, "非手动刷新时 quota 必须走缓存")
+    }
+
+
+    func testActiveModeSchedulesFreshDetailRefreshWhilePopoverIsOpen() async throws {
+        let state = AppState()
+        let mock = MockAPIClient()
+        let updater = BadgeUpdater(
+            state: state,
+            client: mock,
+            activeDetailInterval: 0.05
+        )
+
+        updater.setMode(.active)
+        try await waitUntil {
+            await mock.dailyCallCount >= 2
+        }
+        updater.stop()
+
+        let counts = await mock.snapshot()
+        XCTAssertGreaterThanOrEqual(counts.daily, 2, "打开 popover 后必须持续刷新详情，而不是等 30 分钟/1 小时")
+        let lastDailyRefresh = await mock.lastDailyRefresh
+        XCTAssertEqual(lastDailyRefresh, true, "active 详情刷新必须绕过 usage 响应缓存")
     }
 
     // MARK: - 手动刷新：quota 强刷
@@ -203,6 +227,7 @@ actor MockAPIClient: APIClientProtocol {
     private(set) var quota = 0
     private(set) var lastQuotaRefresh: Bool? = nil
     private(set) var lastDailyRefresh: Bool? = nil
+    var dailyCallCount: Int { daily }
 
     struct Snapshot {
         let agents: Int; let daily: Int; let blocks: Int

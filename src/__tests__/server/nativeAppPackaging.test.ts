@@ -237,14 +237,18 @@ esac
     const badgeUpdater = readFileSync('TokenDashSwift/Sources/TokenDash/BadgeUpdater.swift', 'utf8');
     expect(apiClient).toContain('"&refresh=1"');
     expect(apiClient).toContain('"/quota\\(refresh ? "?refresh=1" : "")"');
-    // v1.8.0: detail endpoints take a `forceRefresh` flag — true on popover open
-    // (forces past the cache), false on the 60s background timer (cache-served).
+    // The badge is the primary live signal, so its 30s update must not reuse
+    // the daemon's 5-minute daily response cache.
+    expect(badgeUpdater).toContain('api.getDaily(agent: agent, refresh: true)');
+    // Detail endpoints take a `forceRefresh` flag, with popover-open and active
+    // visible refreshes forcing past the usage cache while quota stays cached.
     expect(badgeUpdater).toContain('api.getDaily(agent: agent, refresh: forceRefresh)');
     expect(badgeUpdater).toContain('api.getBlocks(agent: agent, refresh: forceRefresh)');
     expect(badgeUpdater).toContain('api.getProjects(agent: agent, refresh: forceRefresh)');
     expect(badgeUpdater).toContain('api.getQuota(refresh: force)');
-    // popover open must still force-refresh (the v1.7.5 guarantee, now via flag)
     expect(badgeUpdater).toContain('performFullUpdate(forceRefresh: true, forceQuota: false)');
+    expect(badgeUpdater).toContain('performActiveDetailRefresh');
+    expect(badgeUpdater).toContain('activeDetailInterval: TimeInterval = 60');
     expect(badgeUpdater).toContain('retainUsableQuotas');
     expect(badgeUpdater).toContain('snapshot.freshness != "stale"');
   });
