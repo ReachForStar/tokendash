@@ -2,18 +2,30 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, afterEach } from 'vitest';
-import { buildCodexResponsesFromSessions, deduplicateParsedSessions, parseCodexSession, scanCodexSessions, type ParsedSession } from '../../server/codexParser.js';
+import { buildCodexResponsesFromSessions, deduplicateParsedSessions, isSessionsDirAccessible, parseCodexSession, scanCodexSessions, type ParsedSession } from '../../server/codexParser.js';
 import { calculateCost } from '../../server/codexPricing.js';
 import type { DailyEntry, Totals } from '../../shared/types.js';
 
 const tempDirs: string[] = [];
 const originalCodexHome = process.env.CODEX_HOME;
+const originalTokendashCodexHome = process.env.TOKENDASH_CODEX_HOME;
+const originalTokendashCodexHomes = process.env.TOKENDASH_CODEX_HOMES;
 
 afterEach(() => {
   if (originalCodexHome === undefined) {
     delete process.env.CODEX_HOME;
   } else {
     process.env.CODEX_HOME = originalCodexHome;
+  }
+  if (originalTokendashCodexHome === undefined) {
+    delete process.env.TOKENDASH_CODEX_HOME;
+  } else {
+    process.env.TOKENDASH_CODEX_HOME = originalTokendashCodexHome;
+  }
+  if (originalTokendashCodexHomes === undefined) {
+    delete process.env.TOKENDASH_CODEX_HOMES;
+  } else {
+    process.env.TOKENDASH_CODEX_HOMES = originalTokendashCodexHomes;
   }
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -104,6 +116,31 @@ function sumDaily(entries: DailyEntry[]): Totals {
 }
 
 describe('scanCodexSessions', () => {
+  it('includes extra Codex-compatible homes without scanning unrelated fixtures', () => {
+    const primaryHome = mkdtempSync(join(tmpdir(), 'tokendash-codex-primary-'));
+    const traeHome = mkdtempSync(join(tmpdir(), 'tokendash-codex-trae-'));
+    tempDirs.push(primaryHome, traeHome);
+    process.env.CODEX_HOME = primaryHome;
+    process.env.TOKENDASH_CODEX_HOMES = traeHome;
+
+    const primaryDir = join(primaryHome, 'sessions', '2026', '07', '23');
+    const traeDir = join(traeHome, 'archived_sessions');
+    const fixtureDir = join(traeHome, '.tmp', 'fixtures');
+    mkdirSync(primaryDir, { recursive: true });
+    mkdirSync(traeDir, { recursive: true });
+    mkdirSync(fixtureDir, { recursive: true });
+
+    const primarySession = join(primaryDir, 'rollout-primary.jsonl');
+    const traeSession = join(traeDir, 'rollout-trae.jsonl');
+    const ignoredFixture = join(fixtureDir, 'rollout-fixture.jsonl');
+    writeFileSync(primarySession, '');
+    writeFileSync(traeSession, '');
+    writeFileSync(ignoredFixture, '');
+
+    expect(scanCodexSessions()).toEqual([primarySession, traeSession].sort());
+    expect(isSessionsDirAccessible()).toBe(true);
+  });
+
   it('keeps archived Codex sessions in the usage source set', () => {
     const codexHome = mkdtempSync(join(tmpdir(), 'tokendash-codex-home-'));
     tempDirs.push(codexHome);
@@ -289,6 +326,18 @@ describe('parseCodexSession', () => {
 });
 
 describe('buildCodexResponsesFromSessions', () => {
+  it('normalizes model casing across Codex-compatible distributors', () => {
+    const responses = buildCodexResponsesFromSessions([
+      session('s1', '/repo/project-a', 'gpt-5.5', [event('2026-05-18T01:00:00.000Z', 1_000, 50)]),
+      session('s2', '/repo/project-a', 'GPT-5.5', [event('2026-05-18T02:00:00.000Z', 2_000, 100)]),
+    ], { timezone: 'UTC' });
+
+    const daily = responses.daily.daily[0];
+    expect(daily.modelsUsed).toEqual(['gpt-5.5']);
+    expect(daily.modelBreakdowns).toHaveLength(1);
+    expect(daily.modelBreakdowns[0]).toMatchObject({ modelName: 'gpt-5.5', inputTokens: 3_000, outputTokens: 150 });
+  });
+
   it('keeps daily, project table, and block totals consistent', () => {
     const responses = buildCodexResponsesFromSessions([
       session('s1', '/repo/project-a', 'gpt-5.4', [
@@ -423,6 +472,18 @@ describe('Codex pricing', () => {
     expect(gpt54).toBeCloseTo(16.375, 6);
     expect(gpt55).toBeCloseTo(32.75, 6);
     expect(gpt55).toBeCloseTo(gpt54 * 2, 6);
+  });
+
+  it('prices uppercase distributor model labels with the same canonical rates', () => {
+    const tokens = {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 500_000,
+      outputTokens: 1_000_000,
+      reasoningOutputTokens: 0,
+      totalTokens: 2_000_000,
+    };
+
+    expect(calculateCost(tokens, new Set(['GPT-5.5']))).toBeCloseTo(32.75, 6);
   });
 
   it('normalizes GPT-5.6 aliases and date suffixes to Sol pricing', () => {
