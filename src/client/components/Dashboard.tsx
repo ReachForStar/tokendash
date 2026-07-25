@@ -190,8 +190,8 @@ export function Dashboard() {
   const [agentsInfo, setAgentsInfo] = useState<AgentsResponse | null>(null);
   const [agentsLoading, setAgentsLoading] = useState(true);
 
-  const [agent, setAgent] = useLocalStorageState<'claude' | 'codex' | 'openclaw' | 'opencode'>('dashboard_agent', 'claude');
-  const isCodex = agent === 'codex' || agent === 'opencode';
+  const [agent, setAgent] = useLocalStorageState<'claude' | 'codex' | 'openclaw' | 'opencode' | 'pi'>('dashboard_agent', 'claude');
+  const isCodex = agent === 'codex' || agent === 'opencode' || agent === 'pi';
 
   const [timeRange, setTimeRange] = useLocalStorageState<TimeRangeKey>('dashboard_timeRange', '30d');
   const [project, setProject] = useLocalStorageState('dashboard_project', '');
@@ -212,7 +212,7 @@ export function Dashboard() {
         setAgentsInfo(info);
         // Fallback stored agent if unavailable
         if (info.available.length > 0 && !info.available.includes(agent)) {
-          setAgent(info.default as 'claude' | 'codex' | 'openclaw' | 'opencode');
+          setAgent(info.default as 'claude' | 'codex' | 'openclaw' | 'opencode' | 'pi');
         }
       })
       .catch(() => {})
@@ -227,7 +227,7 @@ export function Dashboard() {
   const analyticsData = useCcusageData(useCallback(() => fetchAnalytics(agent, project), [agent, project]));
   const [metric, setMetric] = useLocalStorageState<MetricMode>('dashboard_metric', 'tokens');
 
-  const handleAgentChange = (a: 'claude' | 'codex' | 'openclaw' | 'opencode') => {
+  const handleAgentChange = (a: 'claude' | 'codex' | 'openclaw' | 'opencode' | 'pi') => {
     setAgent(a);
     setProject('');
   };
@@ -489,6 +489,11 @@ export function Dashboard() {
       activeColor: 'text-amber-600',
       icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>,
     },
+    pi: {
+      label: 'Pi',
+      activeColor: 'text-violet-600',
+      icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg>,
+    },
   };
 
   const renderAgentSwitcher = () => {
@@ -501,7 +506,7 @@ export function Dashboard() {
           return (
             <button
               key={a}
-              onClick={() => handleAgentChange(a as 'claude' | 'codex' | 'openclaw' | 'opencode')}
+              onClick={() => handleAgentChange(a as 'claude' | 'codex' | 'openclaw' | 'opencode' | 'pi')}
               className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-[13px] font-bold tracking-wide transition-all duration-200 ${isActive
                 ? `bg-white ${cfg.activeColor} shadow-[0_1px_3px_rgba(0,0,0,0.1)] ring-1 ring-stone-900/5`
                 : 'text-stone-500 hover:text-stone-800 hover:bg-stone-200/50'

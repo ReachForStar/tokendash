@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { isPiAccessible } from './piParser.js';
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 const CODEX_SESSIONS_DIR = join(homedir(), '.codex', 'sessions');
@@ -23,10 +24,11 @@ export function isOpencodeAvailable(): boolean {
   return existsSync(join(homedir(), '.local', 'share', 'opencode', 'opencode.db'));
 }
 
-export function detectAvailableAgents(): { claude: boolean; codex: boolean; opencode: boolean } {
+export function detectAvailableAgents(): { claude: boolean; codex: boolean; opencode: boolean; pi: boolean } {
   return {
     claude: isClaudeCodeAvailable(),
     codex: isCodexAvailable(),
     opencode: isOpencodeAvailable(),
+    pi: isPiAccessible(),
   };
 }
