@@ -311,3 +311,13 @@ async function main() {
 }
 
 export { main };
+
+// 仅当文件被直接执行时调用（tsx watch / node index.js）；
+// bin/tokendash.js 通过 import { main } 自行调用，不触发此处。
+import { pathToFileURL } from 'node:url';
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}
