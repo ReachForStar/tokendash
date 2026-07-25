@@ -310,18 +310,26 @@ async function main() {
     console.log('Development mode - use "npm run dev" for full dev experience');
   }
 
-  // Open browser if requested
+  // Open browser if requested.
+  // 开发模式下前端由 Vite 在 5173 端口提供，自动打开 API 端口（3456）并无意义；
+  // 且在 concurrently（npm run dev）下 open 派生的子进程会继承被管道化的 stdio，
+  // 造成管道死锁使服务进程挂起、页面一直加载。故仅生产模式自动打开浏览器，
+  // dev 模式改为提示 Vite 开发服务器地址。
   if (shouldOpenBrowser) {
-    // Small delay to ensure server is ready
-    setTimeout(async () => {
-      console.log('Opening dashboard in your browser...');
-      try {
-        const { default: open } = await import('open');
-        await open(`http://127.0.0.1:${port}`);
-      } catch (err: any) {
-        console.warn('Could not open browser:', err.message);
-      }
-    }, 100);
+    if (isProduction) {
+      // Small delay to ensure server is ready
+      setTimeout(async () => {
+        console.log('Opening dashboard in your browser...');
+        try {
+          const { default: open } = await import('open');
+          await open(`http://127.0.0.1:${port}`);
+        } catch (err: any) {
+          console.warn('Could not open browser:', err.message);
+        }
+      }, 100);
+    } else {
+      console.log('Development mode: open http://localhost:5173/ in your browser (Vite dev server).');
+    }
   } else {
     console.log('Browser auto-open disabled (--no-open)');
   }
