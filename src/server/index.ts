@@ -135,7 +135,28 @@ function listen(app: Express, port: number): Promise<Server> {
   });
 }
 
-async function listenWithPortFallback(app: Express, preferredPort: number): Promise<{ server: Server; port: number; usedFallback: boolean }> {
+async function listenWithPortFallback(app: Express, preferredPort: number, allowFallback: boolean): Promise<{ server: Server; port: number; usedFallback: boolean }> {
+  // 开发模式下 Vite 代理固定指向首选端口，若静默回退到其他端口，
+  // 前端请求会被代理到错误/残留进程导致页面永久加载；故 dev 下
+  // 端口被占用直接报错，不做回退。生产模式无此约束，保留回退。
+  if (!allowFallback) {
+    try {
+      const server = await listen(app, preferredPort);
+      return { server, port: preferredPort, usedFallback: false };
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'EADDRINUSE') {
+        throw new Error(
+          `Port ${preferredPort} is already in use.\n` +
+          'In development mode tokendash does not fall back to another port, because the Vite\n' +
+          'dev proxy is fixed to this port; falling back would leave the dashboard loading forever.\n' +
+          `Free port ${preferredPort} (kill the process using it) and retry.`,
+        );
+      }
+      throw error;
+    }
+  }
+
   let port = preferredPort;
 
   for (let attempt = 0; attempt < 20; attempt++, port++) {
@@ -270,8 +291,12 @@ async function main() {
     process.exit(1);
   }
 
+  const isProduction = import.meta.url.includes('dist/');
   const app = createApp(preferredPort);
-  const { server, port, usedFallback } = await listenWithPortFallback(app, preferredPort);
+  const { server, port, usedFallback } = await listenWithPortFallback(app, preferredPort, isProduction).catch((error) => {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
 
   if (usedFallback) {
     console.warn(`tokendash detected that port ${preferredPort} is already in use, switched to http://127.0.0.1:${port}`);
@@ -279,7 +304,6 @@ async function main() {
 
   console.log(`tokendash running on http://127.0.0.1:${port}`);
   console.log(`API available at http://127.0.0.1:${port}/api`);
-  const isProduction = import.meta.url.includes('dist/');
   if (isProduction) {
     console.log('Serving production build');
   } else {
