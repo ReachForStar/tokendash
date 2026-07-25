@@ -90,14 +90,15 @@ function parseCliArgs(): CliArgs {
 async function ensureUsageSupportAvailable(): Promise<boolean> {
   try {
     const agents = detectAvailableAgents();
-    if (!agents.claude && !agents.codex) {
+    if (!agents.claude && !agents.codex && !agents.pi) {
       console.error('Error: No AI coding assistant data found.');
-      console.error('\nDetails: Could not find Claude Code (~/.claude/projects/) or Codex (~/.codex/sessions/) data.');
-      console.error('Please install at least one of: Claude Code or Codex CLI.');
+      console.error('\nDetails: Could not find Claude Code (~/.claude/projects/), Codex (~/.codex/sessions/) or Pi (~/.pi/agent/sessions/) data.');
+      console.error('Please install at least one of: Claude Code, Codex CLI or Pi.');
       return false;
     }
     if (agents.claude) console.log('  ✓ Claude Code detected');
     if (agents.codex) console.log('  ✓ Codex detected');
+    if (agents.pi) console.log('  ✓ Pi detected');
     return true;
   } catch (error) {
     console.error('Error: failed to detect available AI coding assistants');
@@ -314,8 +315,10 @@ export { main };
 
 // 仅当文件被直接执行时调用（tsx watch / node index.js）；
 // bin/tokendash.js 通过 import { main } 自行调用，不触发此处。
+// process.argv[1] 在部分运行时（如 REPL、嵌入式调用）可能为空，先守卫再转换。
 import { pathToFileURL } from 'node:url';
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+const entrypoint = process.argv[1];
+if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
   main().catch((error) => {
     console.error('Fatal error:', error);
     process.exit(1);
