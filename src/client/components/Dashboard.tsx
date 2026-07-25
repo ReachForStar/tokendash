@@ -191,7 +191,7 @@ export function Dashboard() {
   const [agentsLoading, setAgentsLoading] = useState(true);
 
   const [agent, setAgent] = useLocalStorageState<'claude' | 'codex' | 'openclaw' | 'opencode' | 'pi'>('dashboard_agent', 'claude');
-  const isCodex = agent === 'codex' || agent === 'opencode' || agent === 'pi';
+  const hasNoAnalytics = agent === 'codex' || agent === 'opencode' || agent === 'pi';
 
   const [timeRange, setTimeRange] = useLocalStorageState<TimeRangeKey>('dashboard_timeRange', '30d');
   const [project, setProject] = useLocalStorageState('dashboard_project', '');
@@ -830,7 +830,7 @@ export function Dashboard() {
       </div>
 
       {/* Section: Code Analytics (Claude Code & OpenClaw only) */}
-      {!isCodex && analyticsData.data && (
+      {!hasNoAnalytics && analyticsData.data && (
         <AnalyticsSection analytics={analyticsData.data} timeRange={timeRange} />
       )}
 

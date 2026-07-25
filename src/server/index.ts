@@ -2,7 +2,7 @@ import express from 'express';
 import type { Express } from 'express';
 import { existsSync, readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, join, resolve } from 'node:path';
 import { registerApiRoutes } from './routes/api.js';
 import { detectAvailableAgents } from './agentDetection.js';
@@ -316,7 +316,6 @@ export { main };
 // 仅当文件被直接执行时调用（tsx watch / node index.js）；
 // bin/tokendash.js 通过 import { main } 自行调用，不触发此处。
 // process.argv[1] 在部分运行时（如 REPL、嵌入式调用）可能为空，先守卫再转换。
-import { pathToFileURL } from 'node:url';
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
   main().catch((error) => {

@@ -1,11 +1,4 @@
-import type {
-  DailyEntry,
-  DailyResponse,
-  ProjectsResponse,
-  BlocksResponse,
-  BlockEntry,
-  AnalyticsResponse,
-} from "../src/shared/types.js";
+import type { DailyEntry, DailyResponse, ProjectsResponse, BlocksResponse, BlockEntry, AnalyticsResponse } from '../src/shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Date helpers — all dates are relative to "now" so tests work on any day
@@ -23,7 +16,7 @@ function fmtDate(d: Date): string {
 }
 
 function fmtHour(d: Date): string {
-  return d.toISOString().slice(0, 13).replace("T", " ") + ":00";
+  return d.toISOString().slice(0, 13).replace('T', ' ') + ':00';
 }
 
 function todayStr(): string {
@@ -43,11 +36,7 @@ function seededValue(seed: number): number {
 // Daily entries
 // ---------------------------------------------------------------------------
 
-function makeDailyEntry(
-  date: string,
-  models: string[],
-  seed: number,
-): DailyEntry {
+function makeDailyEntry(date: string, models: string[], seed: number): DailyEntry {
   const total = seededValue(seed);
   const inputRatio = 0.4;
   const outputRatio = 0.1;
@@ -68,7 +57,7 @@ function makeDailyEntry(
     totalTokens: totalInput + totalOutput + totalCacheRead,
     totalCost: 0,
     modelsUsed: models,
-    modelBreakdowns: models.map((name) => ({
+    modelBreakdowns: models.map(name => ({
       modelName: name,
       inputTokens: perModel(totalInput),
       outputTokens: perModel(totalOutput),
@@ -83,19 +72,14 @@ function makeDailyEntry(
 // Block (hourly) entries
 // ---------------------------------------------------------------------------
 
-function makeBlock(
-  date: Date,
-  hour: number,
-  models: string[],
-  idx: number,
-): BlockEntry {
+function makeBlock(date: Date, hour: number, models: string[], idx: number): BlockEntry {
   const val = seededValue(idx * 100 + hour);
   const input = Math.round(val * 0.4);
   const output = Math.round(val * 0.1);
   const cacheRead = Math.round(val * 0.5);
 
   const d = fmtDate(date);
-  const h = String(hour).padStart(2, "0");
+  const h = String(hour).padStart(2, '0');
 
   return {
     id: `block-${idx}`,
@@ -129,36 +113,43 @@ interface AgentConfig {
 
 const AGENT_CONFIGS: Record<string, AgentConfig> = {
   claude: {
-    models: ["claude-sonnet-4-5", "claude-opus-4-5"],
+    models: ['claude-sonnet-4-5', 'claude-opus-4-5'],
     projects: [
-      { path: "/Users/test/project-alpha", weight: 3 },
-      { path: "/Users/test/project-beta", weight: 2 },
-      { path: "/Users/test/project-gamma", weight: 1 },
+      { path: '/Users/test/project-alpha', weight: 3 },
+      { path: '/Users/test/project-beta', weight: 2 },
+      { path: '/Users/test/project-gamma', weight: 1 },
     ],
     hasAnalytics: true,
   },
   opencode: {
-    models: ["glm-4.7", "mimo-v2.5-pro"],
+    models: ['glm-4.7', 'mimo-v2.5-pro'],
     projects: [
-      { path: "/Users/test/workspace-a/task-1/workdir", weight: 3 },
-      { path: "/Users/test/workspace-b/task-2/workdir", weight: 2 },
-      { path: "/Users/test/my-project", weight: 1 },
+      { path: '/Users/test/workspace-a/task-1/workdir', weight: 3 },
+      { path: '/Users/test/workspace-b/task-2/workdir', weight: 2 },
+      { path: '/Users/test/my-project', weight: 1 },
     ],
     hasAnalytics: false,
   },
   codex: {
-    models: ["o3", "o4-mini"],
-    projects: [{ path: "/Users/test/codex-project", weight: 2 }],
+    models: ['o3', 'o4-mini'],
+    projects: [
+      { path: '/Users/test/codex-project', weight: 2 },
+    ],
     hasAnalytics: false,
   },
   openclaw: {
-    models: ["gpt-4.1", "gpt-4.1-mini"],
-    projects: [{ path: "/Users/test/openclaw-project", weight: 2 }],
+    models: ['gpt-4.1', 'gpt-4.1-mini'],
+    projects: [
+      { path: '/Users/test/openclaw-project', weight: 2 },
+    ],
     hasAnalytics: true,
   },
   pi: {
-    models: ["qwen3.8-max-preview", "claude-sonnet-4-5"],
-    projects: [{ path: "D:\\file\\tokendash", weight: 3 }],
+    models: ['qwen3.8-max-preview', 'claude-sonnet-4-5'],
+    projects: [
+      { path: 'D:\\file\\tokendash', weight: 3 },
+      { path: 'D:\\file\\Zed', weight: 2 },
+    ],
     hasAnalytics: false,
   },
 };
@@ -187,14 +178,7 @@ export function generateDailyResponse(agent: string): DailyResponse {
       totalTokens: acc.totalTokens + d.totalTokens,
       totalCost: acc.totalCost + d.totalCost,
     }),
-    {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
-      totalTokens: 0,
-      totalCost: 0,
-    },
+    { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, totalCost: 0 },
   );
 
   return { daily, totals };
@@ -207,10 +191,7 @@ export function generateProjectsResponse(agent: string): ProjectsResponse {
   for (const proj of config.projects) {
     const entries: DailyEntry[] = [];
     // Distribute days across projects by weight
-    const projDays = Math.round(
-      TOTAL_DAYS *
-        (proj.weight / config.projects.reduce((s, p) => s + p.weight, 0)),
-    );
+    const projDays = Math.round(TOTAL_DAYS * (proj.weight / config.projects.reduce((s, p) => s + p.weight, 0)));
     for (let i = projDays; i >= 0; i--) {
       const date = fmtDate(daysAgo(i));
       entries.push(makeDailyEntry(date, config.models, (i + 1) * 7));
@@ -240,21 +221,13 @@ export function generateBlocksResponse(agent: string): BlocksResponse {
   return { blocks };
 }
 
-export function generateAnalyticsResponse(
-  agent: string,
-): AnalyticsResponse | null {
+export function generateAnalyticsResponse(agent: string): AnalyticsResponse | null {
   const config = AGENT_CONFIGS[agent] || AGENT_CONFIGS.claude;
   if (!config.hasAnalytics) return null;
 
   const codeChangeTrend = [];
   const toolCallTrend: Array<Record<string, string | number>> = [];
-  const toolMap: Record<string, number> = {
-    Read: 0,
-    Edit: 0,
-    Bash: 0,
-    Grep: 0,
-    Write: 0,
-  };
+  const toolMap: Record<string, number> = { Read: 0, Edit: 0, Bash: 0, Grep: 0, Write: 0 };
 
   for (let i = 30; i >= 0; i--) {
     const date = fmtDate(daysAgo(i));
@@ -300,9 +273,7 @@ export function generateAnalyticsResponse(
 // Agents detection response
 // ---------------------------------------------------------------------------
 
-export function generateAgentsResponse(
-  agentList: string[] = ["claude", "opencode", "codex"],
-) {
+export function generateAgentsResponse(agentList: string[] = ['claude', 'opencode', 'codex']) {
   return {
     available: agentList,
     default: agentList[0],
@@ -321,10 +292,10 @@ export interface FixtureOverrides {
 }
 
 export async function mockApiRoutes(
-  page: import("@playwright/test").Page,
+  page: import('@playwright/test').Page,
   overrides: FixtureOverrides = {},
 ) {
-  const agentList = overrides.agents || ["claude", "opencode", "codex"];
+  const agentList = overrides.agents || ['claude', 'opencode', 'codex'];
   const cache = new Map<string, unknown>();
 
   function getOrGenerate(key: string, generator: () => unknown): unknown {
@@ -332,56 +303,44 @@ export async function mockApiRoutes(
     return cache.get(key);
   }
 
-  await page.route("**/api/**", async (route) => {
+  await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
-    const path = url.pathname.replace("/api/", "");
-    const agent = url.searchParams.get("agent") || "claude";
+    const path = url.pathname.replace('/api/', '');
+    const agent = url.searchParams.get('agent') || 'claude';
 
     switch (path) {
-      case "agents":
+      case 'agents':
         if (overrides.emptyAgents) {
           await route.fulfill({ json: generateAgentsResponse([]) });
         } else {
-          await route.fulfill({
-            json: getOrGenerate("agents", () =>
-              generateAgentsResponse(agentList),
-            ),
-          });
+          await route.fulfill({ json: getOrGenerate('agents', () => generateAgentsResponse(agentList)) });
         }
         break;
 
-      case "daily":
+      case 'daily':
         await route.fulfill({
-          json: getOrGenerate(`daily:${agent}`, () =>
-            generateDailyResponse(agent),
-          ),
+          json: getOrGenerate(`daily:${agent}`, () => generateDailyResponse(agent)),
         });
         break;
 
-      case "projects":
+      case 'projects':
         await route.fulfill({
-          json: getOrGenerate(`projects:${agent}`, () =>
-            generateProjectsResponse(agent),
-          ),
+          json: getOrGenerate(`projects:${agent}`, () => generateProjectsResponse(agent)),
         });
         break;
 
-      case "blocks":
+      case 'blocks':
         if (overrides.noBlocks) {
           await route.fulfill({ json: { blocks: [] } });
         } else {
           await route.fulfill({
-            json: getOrGenerate(`blocks:${agent}`, () =>
-              generateBlocksResponse(agent),
-            ),
+            json: getOrGenerate(`blocks:${agent}`, () => generateBlocksResponse(agent)),
           });
         }
         break;
 
-      case "analytics": {
-        const analytics = getOrGenerate(`analytics:${agent}`, () =>
-          generateAnalyticsResponse(agent),
-        );
+      case 'analytics': {
+        const analytics = getOrGenerate(`analytics:${agent}`, () => generateAnalyticsResponse(agent));
         if (analytics) {
           await route.fulfill({ json: analytics });
         } else {
@@ -390,14 +349,7 @@ export async function mockApiRoutes(
             json: {
               codeChangeTrend: [],
               toolUsageDistribution: [],
-              productivityKPIs: {
-                avgLinesPerEdit: 0,
-                filesModifiedPerDay: 0,
-                addDeleteRatio: 0,
-                totalEdits: 0,
-                totalFilesModified: 0,
-                activeDaysWithEdits: 0,
-              },
+              productivityKPIs: { avgLinesPerEdit: 0, filesModifiedPerDay: 0, addDeleteRatio: 0, totalEdits: 0, totalFilesModified: 0, activeDaysWithEdits: 0 },
               toolCallTrend: [],
             },
           });
