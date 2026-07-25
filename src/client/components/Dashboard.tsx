@@ -225,6 +225,19 @@ export function Dashboard() {
   const projectsData = useCcusageData(useCallback(() => fetchProjects(agent), [agent]));
   const blocksData = useCcusageData(useCallback(() => fetchBlocks(agent, project), [agent, project]));
   const analyticsData = useCcusageData(useCallback(() => fetchAnalytics(agent, project), [agent, project]));
+
+  // 手动刷新所有数据源
+  const handleRefreshAll = useCallback(() => {
+    dailyData.refetch();
+    projectsData.refetch();
+    blocksData.refetch();
+    analyticsData.refetch();
+  }, [dailyData.refetch, projectsData.refetch, blocksData.refetch, analyticsData.refetch]);
+
+  // 格式化上次更新时间（HH:mm:ss）
+  const lastUpdatedStr = dailyData.lastUpdated
+    ? dailyData.lastUpdated.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : null;
   const [metric, setMetric] = useLocalStorageState<MetricMode>('dashboard_metric', 'tokens');
 
   const handleAgentChange = (a: 'claude' | 'codex' | 'openclaw' | 'opencode' | 'pi') => {
@@ -528,7 +541,19 @@ export function Dashboard() {
           <div className="flex flex-col gap-1.5">
             <h1 className="text-3xl font-extrabold tracking-tight text-stone-900">TokenDash</h1>
           </div>
-          {showAgentSwitcher && renderAgentSwitcher()}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleRefreshAll}
+              disabled={dailyData.loading}
+              title="刷新数据"
+              className="flex items-center justify-center w-8 h-8 rounded-lg text-stone-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors disabled:opacity-40"
+            >
+              <svg className={`w-4 h-4 ${dailyData.loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+            {showAgentSwitcher && renderAgentSwitcher()}
+          </div>
         </div>
         <div className="skeleton h-8 w-48 rounded-lg mb-2" />
         <div className="skeleton h-4 w-72 rounded-lg mb-8" />
@@ -544,7 +569,19 @@ export function Dashboard() {
         <div className="flex flex-col gap-1.5">
           <h1 className="text-3xl font-extrabold tracking-tight text-stone-900">TokenDash</h1>
         </div>
-        {showAgentSwitcher && renderAgentSwitcher()}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleRefreshAll}
+            disabled={dailyData.loading}
+            title="刷新数据"
+            className="flex items-center justify-center w-8 h-8 rounded-lg text-stone-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors disabled:opacity-40"
+          >
+            <svg className={`w-4 h-4 ${dailyData.loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+          {showAgentSwitcher && renderAgentSwitcher()}
+        </div>
       </div>
       <div className="rounded-2xl bg-red-50 border border-red-200/60 p-5"><div className="text-red-600 text-sm font-medium">{dailyData.error}</div></div>
     </div>
@@ -563,7 +600,25 @@ export function Dashboard() {
               Monitor token consumption, costs, and cache efficiency for your AI coding assistants.
             </p>
           </div>
-          {showAgentSwitcher && renderAgentSwitcher()}
+          <div className="flex items-center gap-3">
+            {/* 自动刷新状态 + 手动刷新按钮 */}
+            <div className="flex items-center gap-2">
+              {lastUpdatedStr && (
+                <span className="text-[11px] font-medium text-stone-400">更新于 {lastUpdatedStr}</span>
+              )}
+              <button
+                onClick={handleRefreshAll}
+                disabled={dailyData.loading}
+                title="刷新数据（每 60 秒自动刷新）"
+                className="flex items-center justify-center w-8 h-8 rounded-lg text-stone-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <svg className={`w-4 h-4 ${dailyData.loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+            {showAgentSwitcher && renderAgentSwitcher()}
+          </div>
         </div>
 
         <div className="flex flex-col gap-4">

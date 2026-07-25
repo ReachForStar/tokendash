@@ -1,9 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
-export function useCcusageData<T>(fetcher: () => Promise<T>) {
+const DEFAULT_INTERVAL_MS = 60_000; // 60 秒自动刷新
+
+export function useCcusageData<T>(fetcher: () => Promise<T>, intervalMs: number = DEFAULT_INTERVAL_MS) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -11,6 +15,7 @@ export function useCcusageData<T>(fetcher: () => Promise<T>) {
     try {
       const result = await fetcher();
       setData(result);
+      setLastUpdated(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -18,9 +23,19 @@ export function useCcusageData<T>(fetcher: () => Promise<T>) {
     }
   }, [fetcher]);
 
+  // 首次加载 + fetcher 变化时重新拉取
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  return { data, loading, error, refetch: fetchData };
+  // 定时自动刷新
+  useEffect(() => {
+    if (intervalMs <= 0) return;
+    timerRef.current = setInterval(fetchData, intervalMs);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [fetchData, intervalMs]);
+
+  return { data, loading, error, refetch: fetchData, lastUpdated };
 }
