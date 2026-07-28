@@ -226,11 +226,10 @@ function getHourKey(ts: string, tz: string): string {
   return local.toISOString().slice(0, 13).replace('T', ' ') + ':00';
 }
 
-/** 从 cwd 提取项目名（兼容 Windows 反斜杠和 Unix 斜杠路径）。 */
-function extractProjectName(cwd: string): string {
+/** Keep the full working-directory path so same-named projects do not merge. */
+export function normalizePiProjectPath(cwd: string): string {
   if (!cwd) return 'unknown';
-  const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/);
-  return parts[parts.length - 1] || 'unknown';
+  return cwd.replace(/[\\/]+$/, '') || 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +295,7 @@ function groupSessions(
   const grouped = new Map<string, AggregateBucket>();
 
   for (const session of sessions) {
-    const projectName = extractProjectName(session.cwd);
+    const projectName = normalizePiProjectPath(session.cwd);
     if (projectFilter && projectName !== projectFilter) continue;
 
     for (const ev of session.tokenEvents) {
@@ -361,7 +360,7 @@ export function getProjectsResponse(options?: { timezone?: string }): ProjectsRe
   const projectDaily = new Map<string, Map<string, AggregateBucket>>();
 
   for (const session of sessions) {
-    const projectName = extractProjectName(session.cwd);
+    const projectName = normalizePiProjectPath(session.cwd);
     if (!projectDaily.has(projectName)) projectDaily.set(projectName, new Map());
     const dailyMap = projectDaily.get(projectName)!;
 

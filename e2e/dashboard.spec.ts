@@ -164,6 +164,20 @@ test.describe('Agent: Pi', () => {
   });
 });
 
+test.describe('Dashboard refresh', () => {
+  test('manual refresh bypasses cached dashboard endpoints', async ({ page }) => {
+    await setupPage(page);
+    const paths = ['daily', 'projects', 'blocks', 'analytics'];
+    const refreshRequests = paths.map(path => page.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname === `/api/${path}` && url.searchParams.get('refresh') === '1';
+    }));
+
+    await page.locator('button[title^="刷新数据"]').click();
+    await Promise.all(refreshRequests);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Time Range tests
 // ---------------------------------------------------------------------------

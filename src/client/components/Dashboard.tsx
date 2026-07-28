@@ -221,10 +221,10 @@ export function Dashboard() {
 
   const showAgentSwitcher = (agentsInfo?.available.length ?? 0) > 1;
 
-  const dailyData = useCcusageData(useCallback(() => fetchDaily(agent), [agent]));
-  const projectsData = useCcusageData(useCallback(() => fetchProjects(agent), [agent]));
-  const blocksData = useCcusageData(useCallback(() => fetchBlocks(agent, project), [agent, project]));
-  const analyticsData = useCcusageData(useCallback(() => fetchAnalytics(agent, project), [agent, project]));
+  const dailyData = useCcusageData(useCallback((refresh = false) => fetchDaily(agent, refresh), [agent]));
+  const projectsData = useCcusageData(useCallback((refresh = false) => fetchProjects(agent, refresh), [agent]));
+  const blocksData = useCcusageData(useCallback((refresh = false) => fetchBlocks(agent, project, refresh), [agent, project]));
+  const analyticsData = useCcusageData(useCallback((refresh = false) => fetchAnalytics(agent, project, refresh), [agent, project]));
 
   // 手动刷新所有数据源
   const handleRefreshAll = useCallback(() => {

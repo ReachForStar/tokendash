@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { basename, dirname, join, resolve } from 'node:path';
 import { registerApiRoutes } from './routes/api.js';
-import { detectAvailableAgents } from './agentDetection.js';
+import { detectAvailableAgents, type AvailableAgents } from './agentDetection.js';
 
 interface CliArgs {
   port?: number;
@@ -87,17 +87,23 @@ function parseCliArgs(): CliArgs {
   return result;
 }
 
+export function hasUsageDataSource(agents: AvailableAgents): boolean {
+  return Object.values(agents).some(Boolean);
+}
+
 async function ensureUsageSupportAvailable(): Promise<boolean> {
   try {
     const agents = detectAvailableAgents();
-    if (!agents.claude && !agents.codex && !agents.pi) {
+    if (!hasUsageDataSource(agents)) {
       console.error('Error: No AI coding assistant data found.');
-      console.error('\nDetails: Could not find Claude Code (~/.claude/projects/), Codex (~/.codex/sessions/) or Pi (~/.pi/agent/sessions/) data.');
-      console.error('Please install at least one of: Claude Code, Codex CLI or Pi.');
+      console.error('\nDetails: Could not find Claude Code, Codex, OpenClaw, OpenCode, or Pi usage data.');
+      console.error('Please install at least one supported AI coding assistant.');
       return false;
     }
     if (agents.claude) console.log('  ✓ Claude Code detected');
     if (agents.codex) console.log('  ✓ Codex detected');
+    if (agents.openclaw) console.log('  ✓ OpenClaw detected');
+    if (agents.opencode) console.log('  ✓ OpenCode detected');
     if (agents.pi) console.log('  ✓ Pi detected');
     return true;
   } catch (error) {
