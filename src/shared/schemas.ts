@@ -7,6 +7,7 @@ export const ModelBreakdownSchema = z.object({
   cacheCreationTokens: z.number().default(0),
   cacheReadTokens: z.number().default(0),
   cost: z.number().default(0),
+  estimatedTokens: z.number().min(0).default(0),
 });
 
 export const DailyEntrySchema = z.object({
@@ -19,6 +20,7 @@ export const DailyEntrySchema = z.object({
   totalCost: z.number().default(0),
   modelsUsed: z.array(z.string()).default([]),
   modelBreakdowns: z.array(ModelBreakdownSchema).default([]),
+  estimatedTokens: z.number().min(0).default(0),
 });
 
 export const TotalsSchema = z.object({
@@ -28,6 +30,7 @@ export const TotalsSchema = z.object({
   cacheReadTokens: z.number().default(0),
   totalTokens: z.number().default(0),
   totalCost: z.number().default(0),
+  estimatedTokens: z.number().min(0).default(0),
 });
 
 export const DailyResponseSchema = z.object({

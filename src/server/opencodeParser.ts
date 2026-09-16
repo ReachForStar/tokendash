@@ -286,8 +286,10 @@ export function getDailyResponse(options?: OpenCodeAggregateOptions): DailyRespo
           cacheCreationTokens: m.cacheCreationTokens,
           cacheReadTokens: m.cacheReadTokens,
           cost: m.cost,
+          estimatedTokens: 0,
         };
       }),
+      estimatedTokens: 0,
     });
   }
   daily.sort((a, b) => a.date.localeCompare(b.date));
@@ -301,6 +303,7 @@ export function getDailyResponse(options?: OpenCodeAggregateOptions): DailyRespo
       cacheReadTokens: totalsAcc.cacheReadTokens,
       totalTokens: totalsAcc.totalTokens,
       totalCost: totalsAcc.cost,
+      estimatedTokens: 0,
     },
   };
 }
@@ -338,6 +341,7 @@ export function getProjectsResponse(options?: OpenCodeAggregateOptions): Project
         totalCost: 0,
         modelsUsed: [],
         modelBreakdowns: [],
+        estimatedTokens: 0,
       };
       projects[projectName].push(dayEntry);
     }
@@ -363,6 +367,7 @@ export function getProjectsResponse(options?: OpenCodeAggregateOptions): Project
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
         cost: 0,
+        estimatedTokens: 0,
       };
       dayEntry.modelBreakdowns.push(breakdown);
     }

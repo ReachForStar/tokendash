@@ -350,7 +350,9 @@ function accToEntry(date: string, acc: TokenAccumulator, models: Set<string>): D
       cacheCreationTokens: acc.cacheWriteTokens,
       cacheReadTokens: acc.cacheReadTokens,
       cost: costPerModel,
+      estimatedTokens: 0,
     })),
+    estimatedTokens: 0,
   };
 }
 
@@ -404,6 +406,7 @@ export function getDailyResponse(options?: OpenClawAggregateOptions): DailyRespo
       cacheReadTokens: totalsAcc.cacheReadTokens,
       totalTokens: totalsAcc.totalTokens,
       totalCost: totalsAcc.cost,
+      estimatedTokens: 0,
     },
   };
 }

@@ -644,6 +644,7 @@ function accToEntry(date: string, acc: TokenAccumulator, modelAccs: Map<string, 
     totalCost,
     modelsUsed: modelNames,
     modelBreakdowns,
+    estimatedTokens: 0,
   };
 }
 
@@ -657,6 +658,7 @@ function buildModelBreakdowns(modelAccs: Map<string, TokenAccumulator>): ModelBr
       cacheCreationTokens: 0,
       cacheReadTokens: display.cachedInputTokens,
       cost: calculateCost(acc, new Set([modelName])),
+      estimatedTokens: 0,
     };
   });
 }
@@ -746,6 +748,7 @@ function buildDailyResponseFromSummaries(summaries: CodexFileAggregate[]): Daily
       cacheReadTokens: totalsAcc.cachedInputTokens,
       totalTokens: totalsAcc.totalTokens,
       totalCost,
+      estimatedTokens: 0,
     },
   };
 }
@@ -888,6 +891,7 @@ function buildDailyResponse(sessions: ParsedSession[], options?: Partial<Aggrega
       cacheReadTokens: totalsAcc.cachedInputTokens,
       totalTokens: totalsAcc.totalTokens,
       totalCost,
+      estimatedTokens: 0,
     },
   };
 }

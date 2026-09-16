@@ -387,7 +387,8 @@ export function Dashboard() {
       cacheReadTokens: acc.cacheReadTokens + d.cacheReadTokens,
       totalTokens: acc.totalTokens + d.totalTokens,
       totalCost: acc.totalCost + d.totalCost,
-    }), { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, totalCost: 0 });
+      estimatedTokens: acc.estimatedTokens + d.estimatedTokens,
+    }), { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, totalCost: 0, estimatedTokens: 0 });
   }, [filteredDaily]);
 
   const activeDays = useMemo(() => filteredDaily.filter(d => d.totalTokens > 0).length, [filteredDaily]);
@@ -782,8 +783,13 @@ export function Dashboard() {
         <KPICard
           label={isTokens ? 'Total tokens' : 'Total cost'}
           value={isTokens ? formatTokens(totals.totalTokens) : formatUSD(totals.totalCost)}
+          sub={isTokens && totals.estimatedTokens > 0 ? `≈ ${formatTokens(totals.estimatedTokens)} estimated` : undefined}
           accent
-          insight={isTokens ? 'The primary volume indicator for the selected period.' : 'Estimated spend for the selected period.'}
+          insight={isTokens
+            ? (totals.estimatedTokens > 0
+              ? 'Volume includes estimates for local models whose provider does not report usage.'
+              : 'The primary volume indicator for the selected period.')
+            : 'Estimated spend for the selected period.'}
         />
         <KPICard
           label={isTokens ? 'Daily avg' : 'Daily avg cost'}
@@ -1003,7 +1009,7 @@ export function Dashboard() {
                   <td className="py-2.5 px-4 text-right font-mono text-stone-500">{formatTokens(d.inputTokens)}</td>
                   <td className="py-2.5 px-4 text-right font-mono text-stone-500">{formatTokens(d.outputTokens)}</td>
                   <td className="py-2.5 px-4 text-right font-mono text-indigo-500/70">{formatTokens(d.cacheReadTokens)}</td>
-                  <td className="py-2.5 px-4 text-right font-mono font-semibold text-indigo-600">{formatTokens(d.totalTokens)}</td>
+                  <td className="py-2.5 px-4 text-right font-mono font-semibold text-indigo-600" title={d.estimatedTokens > 0 ? `Includes ${formatTokens(d.estimatedTokens)} estimated (provider did not report usage)` : undefined}>{formatTokens(d.totalTokens)}{d.estimatedTokens > 0 ? ' ≈' : ''}</td>
                   <td className="py-2.5 px-4 text-right font-mono font-medium text-stone-600 bg-stone-50/40">{formatUSD(d.totalCost)}</td>
                   <td className="py-2.5 px-4 text-stone-500 font-medium truncate max-w-[200px]">{d.modelsUsed.map(shortModelName).join(', ')}</td>
                 </tr>

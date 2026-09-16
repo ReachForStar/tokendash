@@ -340,6 +340,7 @@ function toDailyEntry(agg: DayAgg): DailyEntry {
     cacheCreationTokens: m.cacheCreation,
     cacheReadTokens: m.cacheRead,
     cost: m.cost,
+    estimatedTokens: 0,
   }));
 
   return {
@@ -352,6 +353,7 @@ function toDailyEntry(agg: DayAgg): DailyEntry {
     totalCost: Math.round(agg.totalCost * 10000) / 10000,
     modelsUsed: [...agg.models.keys()],
     modelBreakdowns,
+    estimatedTokens: 0,
   };
 }
 
@@ -463,7 +465,8 @@ export function getDailyResponse(project?: string | null, tz = DEFAULT_TZ): Dail
     cacheReadTokens: acc.cacheReadTokens + d.cacheReadTokens,
     totalTokens: acc.totalTokens + d.totalTokens,
     totalCost: acc.totalCost + d.totalCost,
-  }), { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, totalCost: 0 });
+    estimatedTokens: acc.estimatedTokens + d.estimatedTokens,
+  }), { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0, totalCost: 0, estimatedTokens: 0 });
 
   return { daily, totals };
 }
