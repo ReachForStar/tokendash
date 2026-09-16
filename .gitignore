@@ -26,3 +26,5 @@ electron/trayBadge.js
 electron/trayHelper
 release/
 TokenDashSwift/.build/
+.qmd/
+tmp/
