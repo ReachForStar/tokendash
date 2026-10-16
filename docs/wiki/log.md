@@ -14,3 +14,19 @@
 ## [2026-10-16] fix | 更换仪表盘设置图标
 
 - [仪表盘设置入口](entities/dashboard-settings.md)：改用齿轮，保留原有点击行为和无障碍名称；203 项单元测试及浏览器点击验证通过。
+
+## [2026-10-16] feat | 沉淀跨 Agent 汇总、币种与会话解析
+
+- [所有 Agent 汇总](entities/all-agents-dashboard.md)：复用主仪表盘，Token／费用累加，同名项目合并。
+- [模型计费与币种](entities/model-pricing.md)：统一模型名称计费与可保存汇率，AMAX 价格保留人民币单位。
+- [会话内容与分析](entities/session-transcripts.md)：补齐 OpenCode、Pi 真实消息和工具事件。
+- [验收记录](queries/agent-currency-pricing-verification.md)：记录实际服务修复、真实数据验证和剩余回归。
+
+## [2026-10-16] fix | 明确 Sessions 模块职责
+
+- [会话内容与分析](entities/session-transcripts.md)：移除重复的 Token 与费用总览卡片，复用时间、项目和设置入口；保留会话检索、行为分析及详情。
+- [验收记录](queries/agent-currency-pricing-verification.md)：210 项单元测试及类型检查通过，端到端回归 47 项通过；字体请求连接重置已通过本地打包修复。
+
+## [2026-10-16] fix | 本地打包页面字体
+
+- [验收记录](queries/agent-currency-pricing-verification.md)：确认 jsDelivr 两个字体请求连接重置，改用同版本本地字体并保留许可证；完整 47 项端到端回归及类型检查通过。

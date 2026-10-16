@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const ModelBreakdownSchema = z.object({
+  totalTokens: z.number().optional(),
   modelName: z.string(),
   inputTokens: z.number().default(0),
   outputTokens: z.number().default(0),
@@ -134,6 +135,7 @@ const CodexSettingsResponseSchema = z.object({
 });
 
 export const AppSettingsResponseSchema = z.object({
+  billing: z.object({ exchangeRate: z.number().positive().finite() }).optional(),
   codex: CodexSettingsResponseSchema,
 });
 
@@ -220,6 +222,8 @@ export const SessionDetailSchema = z.object({
 
 const SessionAnalyticsResponseSchema = z.object({
   summary: z.object({
+    totalTokens: z.number().optional(),
+    totalCost: z.number().optional(),
     sessionCount: z.number().default(0),
     llmCallCount: z.number().default(0),
     skillCallCount: z.number().optional(),

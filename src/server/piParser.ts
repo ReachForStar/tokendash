@@ -1,3 +1,5 @@
+import './appSettings.js';
+import { modelCost, getPricingExchangeRate } from '../shared/modelPricing.js';
 import { readFileSync, readdirSync, statSync, accessSync, constants } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -225,18 +227,23 @@ export function parsePiSession(filepath: string): PiSession | null {
 
     if (totalTokens > 0) {
       const input = (usage!.input as number) || 0;
+      const reasoning = (usage!.reasoning as number) || 0;
       let output = (usage!.output as number) || 0;
-      if (input + output === 0) output = totalTokens; // 部分 provider 只报 total
+      if (input + output === 0 && reasoning === 0) output = totalTokens; // 部分 provider 只报 total
+      // reasoning 是模型生成的思维链 token，计入输出与总量
+      output += reasoning;
+      const cacheRead = (usage!.cacheRead as number) || 0;
+      const cacheWrite = (usage!.cacheWrite as number) || 0;
       const costObj = (usage!.cost as Record<string, unknown>) || {};
       tokenEvents.push({
         timestamp,
         model,
         inputTokens: input,
         outputTokens: output,
-        cacheReadTokens: (usage!.cacheRead as number) || 0,
-        cacheWriteTokens: (usage!.cacheWrite as number) || 0,
-        totalTokens: totalTokens || input + output,
-        cost: (costObj.total as number) || 0,
+        cacheReadTokens: cacheRead,
+        cacheWriteTokens: cacheWrite,
+        totalTokens: (totalTokens || input + output + cacheRead) + reasoning,
+        cost: modelCost(model, input, output, cacheRead, cacheWrite, timestamp) ?? ((costObj.total as number) || 0),
         estimated: false,
       });
       // 本条 assistant 内容会在下一轮被回放；有真实 input 时用它重锚定
@@ -272,7 +279,7 @@ export function parsePiSession(filepath: string): PiSession | null {
 function loadSessions(): PiSession[] {
   const result = buildUsageFileIndex<PiSession | null, { path: string }>({
     cacheName: 'pi-sessions',
-    parserVersion: PI_INDEX_VERSION,
+    parserVersion: `${PI_INDEX_VERSION}:pricing-v2:${getPricingExchangeRate()}`,
     files: scanPiSessions().map(path => ({ path })),
     parseFile: file => parsePiSession(file.path),
   });

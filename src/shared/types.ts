@@ -1,4 +1,5 @@
 export interface ModelBreakdown {
+  totalTokens?: number;
   modelName: string;
   inputTokens: number;
   outputTokens: number;
@@ -134,6 +135,7 @@ export interface CodexSettingsResponse {
 }
 
 export interface AppSettingsResponse {
+  billing?: { exchangeRate: number };
   codex: CodexSettingsResponse;
 }
 
@@ -236,6 +238,8 @@ export interface SessionAnalyticsCapabilities {
 }
 
 export interface SessionAnalyticsSummary {
+  totalTokens?: number;
+  totalCost?: number;
   sessionCount: number;
   llmCallCount: number;
   skillCallCount?: number;

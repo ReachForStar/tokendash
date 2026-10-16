@@ -3,7 +3,7 @@ title: pi 解析器（piParser）
 type: entity
 tags: [pi, parser, 模块]
 created: 2026-09-17
-updated: 2026-09-17
+updated: 2026-10-16
 status: active
 ---
 
@@ -25,7 +25,7 @@ status: active
 
 ## 关键文件/接口
 
-- `src/server/piParser.ts`（约 564 行）
+- `src/server/piParser.ts`
 - 导出：`isPiAccessible()`、`scanPiSessions()`、`parsePiSession()`、
   `buildDailyFromSessions()`（纯函数，便于单测注入 fixture）、
   `getDailyResponse()`、`getProjectsResponse()`、`getBlocksResponse()`。
@@ -44,6 +44,8 @@ status: active
 - 前端：`Dashboard.tsx` 对含估算的条目显示 `≈` 与 estimated 提示。
 
 ## 重要变更记录
+
+- 2026-10-16：接入[共享模型计费](model-pricing.md)，索引版本包含价格版本与设置汇率；补充[会话内容与分析](session-transcripts.md)，由原始消息读取用户请求、模型回复、工具和 Skill 事件。
 
 - 2026-09-17：为不返回 usage 的本地模型加入 token 估算（基线上下文 + 逐条累积 +
   真实 usage 重锚定 + compaction 回落），新增 `estimatedTokens` 贯穿各聚合层；
