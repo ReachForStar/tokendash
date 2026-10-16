@@ -1,6 +1,6 @@
 ---
 type: index
-updated: 2026-09-17
+updated: 2026-10-16
 ---
 
 # Wiki 索引
@@ -9,6 +9,8 @@ updated: 2026-09-17
 > 格式：`[页面标题](相对路径) — 一行摘要`。
 
 ## 实体 entities
+
+- [仪表盘设置入口](entities/dashboard-settings.md) — 齿轮按钮与 Codex 数据源配置弹窗
 
 - [pi 解析器（piParser）](entities/pi-parser.md) — 解析 pi 会话 JSONL，支持本地模型 token 估算
 

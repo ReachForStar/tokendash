@@ -606,7 +606,7 @@ export function Dashboard() {
       className="flex items-center justify-center w-8 h-8 rounded-lg text-stone-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
       aria-label="Configure Codex data sources"
     >
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 16v-2m8-6h-2M6 12H4m12.95 4.95-1.414-1.414M8.464 8.464 7.05 7.05m9.9 0-1.414 1.414M8.464 15.536 7.05 16.95M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" /></svg>
+      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m9.75 3-.5 2a7.2 7.2 0 0 0-1.5.87l-2-.57L3.5 9.2 5 10.65a7.2 7.2 0 0 0 0 1.7L3.5 13.8l2.25 3.9 2-.57a7.2 7.2 0 0 0 1.5.87l.5 2h4.5l.5-2a7.2 7.2 0 0 0 1.5-.87l2 .57 2.25-3.9-1.5-1.45a7.2 7.2 0 0 0 0-1.7l1.5-1.45-2.25-3.9-2 .57A7.2 7.2 0 0 0 14.75 5l-.5-2h-4.5Z" /><circle cx="12" cy="11.5" r="3" strokeWidth={2} /></svg>
     </button>
   );
 
