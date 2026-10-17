@@ -11,7 +11,8 @@ interface HeaderProps {
 
 export function Header({ summary, cacheRate, refreshing, onRefresh }: HeaderProps) {
   return (
-    <div className="header">
+    // 无边框面板靠标题区拖动：deep 让整棵子树可拖，按钮等可交互元素自动排除
+    <div className="header" data-tauri-drag-region="deep">
       <div className="header-left">
         <div className="tokens mono-num">
           {summary && summary.tokens > 0 ? formatTokens(summary.tokens) : '—'}

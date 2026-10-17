@@ -99,16 +99,8 @@ fn create(app: &AppHandle) -> Result<(), String> {
         .build()
         .map_err(|error| format!("无法创建面板窗口：{error}"))?;
 
-    let handle = app.clone();
-    window.on_window_event(move |event| match event {
-        tauri::WindowEvent::Focused(false) => {
-            // Standard popover behaviour: clicking anywhere else dismisses it.
-            hide(&handle);
-        }
-        tauri::WindowEvent::Destroyed => {}
-        _ => {}
-    });
-
+    // No focus-loss dismissal: the panel stays open until toggled from the tray,
+    // matching the macOS behaviour where the NSPanel sets hidesOnDeactivate=false.
     place(app, &window);
     window.show().map_err(|error| format!("无法显示面板窗口：{error}"))?;
     window.set_focus().map_err(|error| format!("无法聚焦面板窗口：{error}"))?;
