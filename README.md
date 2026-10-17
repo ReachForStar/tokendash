@@ -8,14 +8,14 @@
   
   **Your local command center for AI coding usage.**
 
-  Track tokens, costs, models, projects, and coding-plan limits from the macOS menu bar, with a detailed local dashboard when you need to dig deeper.
+  Track tokens, costs, models, projects, and coding-plan limits from the macOS menu bar or the Ubuntu system tray, with a detailed local dashboard when you need to dig deeper.
 
   [![Latest release](https://img.shields.io/github/v/release/zhangferry/tokendash?style=flat-square)](https://github.com/zhangferry/tokendash/releases/latest)
   [![npm](https://img.shields.io/npm/v/@zhangferry-dev/tokendash?style=flat-square)](https://www.npmjs.com/package/@zhangferry-dev/tokendash)
   [![Test](https://img.shields.io/github/actions/workflow/status/zhangferry/tokendash/test.yml?branch=main&style=flat-square&label=tests)](https://github.com/zhangferry/tokendash/actions/workflows/test.yml)
   [![License](https://img.shields.io/github/license/zhangferry/tokendash?style=flat-square)](LICENSE)
 
-  [Download for macOS](https://github.com/zhangferry/tokendash/releases/latest) · [Run with npx](#run-the-web-dashboard) · [Features](#what-you-get) · [Development](#development)
+  [Download for macOS](https://github.com/zhangferry/tokendash/releases/latest) · [Download for Ubuntu](https://github.com/zhangferry/tokendash/releases/latest) · [Run with npx](#run-the-web-dashboard) · [Features](#what-you-get) · [Development](#development)
 </div>
 
 ![TokenDash menu bar app and web dashboard](resources/readme-hero.png)
@@ -24,7 +24,7 @@
 
 AI coding tools make it easy to consume millions of tokens without a clear picture of where they went. TokenDash turns local session data into an at-a-glance view of today's activity and a deeper history of your usage.
 
-- **Glanceable by design** — see today's tokens, estimated cost, cache rate, model mix, and quota status without leaving the menu bar.
+- **Glanceable by design** — see today's tokens, estimated cost, cache rate, model mix, and quota status without leaving the menu bar or system tray.
 - **One view across tools** — bring Claude Code, Codex, OpenClaw, and OpenCode usage into the same product.
 - **Local-first** — usage history is parsed directly from files already stored on your machine.
 - **Useful beyond totals** — understand hourly activity, model and project distribution, cache efficiency, code changes, and tool calls.
@@ -78,9 +78,9 @@ TokenDash opens `http://localhost:3456` automatically. No global installation is
 
 ## What You Get
 
-### A Native macOS Companion
+### A Native Desktop Companion
 
-The menu bar keeps the information you check most often close at hand:
+On macOS the menu bar, and on Ubuntu the system tray, keep the information you check most often close at hand:
 
 - Live token total in the status bar
 - Today's token and estimated cost summary
@@ -88,7 +88,7 @@ The menu bar keeps the information you check most often close at hand:
 - Usage breakdown by model and token type
 - Coding-plan usage with reset countdowns
 - Configurable low-quota notifications
-- Launch at login, light/dark appearance, and automatic update checks
+- Launch at login, light/dark appearance (automatic update checks on macOS)
 
 <p align="center">
   <img src="resources/product_menu.png" width="420" alt="TokenDash macOS menu bar popover">
@@ -124,7 +124,7 @@ TokenDash only shows tools it detects on the current machine.
 
 ### Coding-Plan Quotas
 
-The macOS app can also display the current limits reported by:
+The macOS and Ubuntu apps can also display the current limits reported by:
 
 - Claude Code
 - OpenAI Codex
