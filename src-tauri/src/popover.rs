@@ -90,7 +90,10 @@ fn create(app: &AppHandle) -> Result<(), String> {
     let window = WebviewWindowBuilder::new(app, POPOVER_LABEL, initial_url(app))
         .title("TokenDash")
         .inner_size(POPOVER_WIDTH, DEFAULT_HEIGHT)
-        .resizable(false)
+        // 必须保持 resizable：GTK 在 resizable(false) 时把尺寸提示锁成 min==max，
+        // mutter 会忽略 `set_content_height` 的 resize，窗口停在 620 而内容只有约 590，
+        // 底部留下上一帧未重绘的残影。无边框窗口没有可供拖拽的边框，用户无法手动改变大小。
+        .resizable(true)
         .decorations(false)
         .transparent(true)
         .skip_taskbar(true)
