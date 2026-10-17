@@ -78,6 +78,12 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # tauri.conf.json 的 bundle.resources 指向 gen/server；该目录由
+      # package-linux.sh 生成且在 .gitignore 中。Rust 检查不需要真实资源，
+      # 但 tauri-build 会校验路径存在，故建空目录占位。
+      - name: Stage bundle resources placeholder
+        run: mkdir -p src-tauri/gen/server
+
       - name: Check formatting
         working-directory: src-tauri
         run: cargo fmt --check
