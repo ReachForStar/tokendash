@@ -45,7 +45,7 @@ pub fn run() {
                 daemon::find_node(),
             );
             app.manage(state);
-            tray::install(&handle).map_err(|error| Box::<dyn std::error::Error>::from(error))?;
+            tray::install(&handle).map_err(Box::<dyn std::error::Error>::from)?;
             start_supervisor(handle);
             Ok(())
         })
@@ -182,7 +182,10 @@ fn get_desktop_settings() -> settings::DesktopSettings {
 }
 
 #[tauri::command]
-fn save_desktop_settings(app: AppHandle, settings: settings::DesktopSettings) -> Result<settings::DesktopSettings, String> {
+fn save_desktop_settings(
+    app: AppHandle,
+    settings: settings::DesktopSettings,
+) -> Result<settings::DesktopSettings, String> {
     let saved = settings::save(&settings)?;
     // Only touch the autostart entry when the flag actually changed, so an
     // unrelated settings write cannot clobber a hand-edited .desktop file.
@@ -199,7 +202,11 @@ fn get_configured_providers() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn save_credential(provider: String, api_key: String, base_url: Option<String>) -> Result<(), String> {
+fn save_credential(
+    provider: String,
+    api_key: String,
+    base_url: Option<String>,
+) -> Result<(), String> {
     credentials::save_credential(&provider, &api_key, base_url)
 }
 
@@ -216,7 +223,8 @@ fn get_daemon_port(app: AppHandle) -> Option<u16> {
 #[tauri::command]
 async fn open_dashboard(app: AppHandle) -> Result<(), String> {
     let port = daemon::ensure_started(&app).await?;
-    open::that(format!("http://127.0.0.1:{port}/")).map_err(|error| format!("无法打开浏览器：{error}"))
+    open::that(format!("http://127.0.0.1:{port}/"))
+        .map_err(|error| format!("无法打开浏览器：{error}"))
 }
 
 #[tauri::command]
@@ -243,7 +251,10 @@ fn set_popover_height(app: AppHandle, height: f64) {
 fn notify(title: String, body: String) {
     // Best effort: desktop notifications go through notify-send, which ships
     // with Ubuntu desktops but is not a hard requirement of this app.
-    if let Err(error) = std::process::Command::new("notify-send").args(["-a", "TokenDash", &title, &body]).status() {
+    if let Err(error) = std::process::Command::new("notify-send")
+        .args(["-a", "TokenDash", &title, &body])
+        .status()
+    {
         eprintln!("[tokendash] 无法发送桌面通知：{error}");
     }
 }

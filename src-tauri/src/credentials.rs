@@ -27,7 +27,10 @@ pub struct ProviderCredential {
 }
 
 fn is_blank(value: &Option<String>) -> bool {
-    value.as_deref().map(|value| value.trim().is_empty()).unwrap_or(true)
+    value
+        .as_deref()
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(true)
 }
 
 pub type CredentialFile = std::collections::BTreeMap<String, ProviderCredential>;
@@ -46,7 +49,8 @@ fn write_all(credentials: &CredentialFile) -> Result<(), String> {
     let path = paths::credentials_path();
     let serialized = serde_json::to_string_pretty(credentials)
         .map_err(|error| format!("无法序列化凭据：{error}"))?;
-    fs::write(&path, format!("{serialized}\n")).map_err(|error| format!("无法写入凭据：{error}"))?;
+    fs::write(&path, format!("{serialized}\n"))
+        .map_err(|error| format!("无法写入凭据：{error}"))?;
     #[cfg(unix)]
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
         .map_err(|error| format!("无法设置凭据文件权限：{error}"))?;
@@ -54,7 +58,11 @@ fn write_all(credentials: &CredentialFile) -> Result<(), String> {
 }
 
 /// Saves one provider key, preserving every other entry in the file.
-pub fn save_credential(provider: &str, api_key: &str, base_url: Option<String>) -> Result<(), String> {
+pub fn save_credential(
+    provider: &str,
+    api_key: &str,
+    base_url: Option<String>,
+) -> Result<(), String> {
     if !EDITABLE_PROVIDERS.contains(&provider) {
         return Err(format!("不支持的服务商：{provider}"));
     }

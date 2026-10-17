@@ -23,8 +23,14 @@ pub struct TrayHandles {
 }
 
 pub fn install(app: &AppHandle) -> Result<(), String> {
-    let summary = MenuItem::with_id(app, "summary", badge::summary_label(None, None), false, None::<&str>)
-        .map_err(|error| format!("无法创建托盘菜单：{error}"))?;
+    let summary = MenuItem::with_id(
+        app,
+        "summary",
+        badge::summary_label(None, None),
+        false,
+        None::<&str>,
+    )
+    .map_err(|error| format!("无法创建托盘菜单：{error}"))?;
     let toggle = MenuItem::with_id(app, "toggle", "打开面板", true, None::<&str>)
         .map_err(|error| format!("无法创建托盘菜单：{error}"))?;
     let dashboard = MenuItem::with_id(app, "dashboard", "打开仪表盘", true, None::<&str>)
@@ -40,12 +46,18 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
         None::<&str>,
     )
     .map_err(|error| format!("无法创建托盘菜单：{error}"))?;
-    let separator = PredefinedMenuItem::separator(app).map_err(|error| format!("无法创建托盘菜单：{error}"))?;
+    let separator =
+        PredefinedMenuItem::separator(app).map_err(|error| format!("无法创建托盘菜单：{error}"))?;
     let quit = MenuItem::with_id(app, "quit", "退出 TokenDash", true, None::<&str>)
         .map_err(|error| format!("无法创建托盘菜单：{error}"))?;
 
-    let menu = Menu::with_items(app, &[&summary, &toggle, &dashboard, &refresh, &autostart, &separator, &quit])
-        .map_err(|error| format!("无法创建托盘菜单：{error}"))?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &summary, &toggle, &dashboard, &refresh, &autostart, &separator, &quit,
+        ],
+    )
+    .map_err(|error| format!("无法创建托盘菜单：{error}"))?;
 
     app.manage(TrayHandles {
         summary: summary.clone(),
@@ -66,9 +78,15 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
         });
 
     if let Some(image) = badge::render_badge(None) {
-        builder = builder.icon(tauri::image::Image::new_owned(image.rgba, image.width, image.height));
+        builder = builder.icon(tauri::image::Image::new_owned(
+            image.rgba,
+            image.width,
+            image.height,
+        ));
     }
-    builder.build(app).map_err(|error| format!("无法创建托盘图标：{error}"))?;
+    builder
+        .build(app)
+        .map_err(|error| format!("无法创建托盘图标：{error}"))?;
     Ok(())
 }
 
@@ -106,7 +124,9 @@ pub fn sync_autostart(app: &AppHandle, enabled: bool) {
 fn toggle_autostart(app: &AppHandle) {
     let mut settings = settings::load();
     settings.launch_at_login = !settings::is_autostart_enabled();
-    match settings::save(&settings).and_then(|saved| settings::apply_autostart(saved.launch_at_login).map(|()| saved)) {
+    match settings::save(&settings)
+        .and_then(|saved| settings::apply_autostart(saved.launch_at_login).map(|()| saved))
+    {
         Ok(saved) => sync_autostart(app, saved.launch_at_login),
         Err(error) => eprintln!("[tokendash] 无法切换开机自启：{error}"),
     }

@@ -53,7 +53,12 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    pub fn new(app_version: String, daemon_script: PathBuf, script_found: bool, node_path: Option<PathBuf>) -> Self {
+    pub fn new(
+        app_version: String,
+        daemon_script: PathBuf,
+        script_found: bool,
+        node_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             port: Mutex::new(None),
             child: Mutex::new(None),
@@ -70,7 +75,10 @@ impl DaemonState {
     }
 
     pub fn error(&self) -> Option<String> {
-        self.error.lock().expect("daemon error lock poisoned").clone()
+        self.error
+            .lock()
+            .expect("daemon error lock poisoned")
+            .clone()
     }
 
     fn set_error(&self, message: Option<String>) {
@@ -122,7 +130,8 @@ pub async fn ensure_started(app: &AppHandle) -> Result<u16, String> {
     }
 
     let Some(node) = state.node_path.clone() else {
-        let message = "未找到 Node.js 22 或更高版本。安装 Node.js 后重新打开 TokenDash。".to_string();
+        let message =
+            "未找到 Node.js 22 或更高版本。安装 Node.js 后重新打开 TokenDash。".to_string();
         state.set_error(Some(message.clone()));
         return Err(message);
     };
@@ -177,12 +186,19 @@ pub async fn ensure_started(app: &AppHandle) -> Result<u16, String> {
 /// running, or the pid file names a live process.
 pub fn is_alive(app: &AppHandle) -> bool {
     let state = app.state::<DaemonState>();
-    if let Some(child) = state.child.lock().expect("daemon child lock poisoned").as_mut() {
+    if let Some(child) = state
+        .child
+        .lock()
+        .expect("daemon child lock poisoned")
+        .as_mut()
+    {
         if matches!(child.try_wait(), Ok(None)) {
             return true;
         }
     }
-    read_pid_file().map(paths::is_process_alive).unwrap_or(false)
+    read_pid_file()
+        .map(paths::is_process_alive)
+        .unwrap_or(false)
 }
 
 /// Network-level liveness, used where a pid file can lag the real listener.
@@ -196,7 +212,12 @@ pub async fn is_alive_via_probe(app: &AppHandle) -> bool {
 
 pub fn stop(app: &AppHandle) {
     let state = app.state::<DaemonState>();
-    if let Some(mut child) = state.child.lock().expect("daemon child lock poisoned").take() {
+    if let Some(mut child) = state
+        .child
+        .lock()
+        .expect("daemon child lock poisoned")
+        .take()
+    {
         terminate_child(&mut child);
     }
     if let Some(pid) = read_pid_file() {
@@ -283,7 +304,10 @@ fn cleanup_incompatible_daemon() {
 }
 
 fn is_tokendash_daemon_process(pid: u32) -> bool {
-    let Ok(output) = Command::new("ps").args(["-p", &pid.to_string(), "-o", "command="]).output() else {
+    let Ok(output) = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+    else {
         return false;
     };
     let command = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
@@ -291,7 +315,9 @@ fn is_tokendash_daemon_process(pid: u32) -> bool {
 }
 
 fn terminate_child(child: &mut Child) {
-    let _ = Command::new("kill").args(["-TERM", &child.id().to_string()]).status();
+    let _ = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status();
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         if let Ok(Some(_)) = child.try_wait() {
@@ -303,7 +329,9 @@ fn terminate_child(child: &mut Child) {
 }
 
 fn terminate_pid(pid: u32) {
-    let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    let _ = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         if !paths::is_process_alive(pid) {
@@ -311,7 +339,9 @@ fn terminate_pid(pid: u32) {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+    let _ = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status();
 }
 
 // ---------------------------------------------------------------------------
@@ -340,7 +370,10 @@ pub fn find_node() -> Option<PathBuf> {
 
     for base in [
         home.join(".nvm").join("versions").join("node"),
-        home.join(".local").join("share").join("fnm").join("node-versions"),
+        home.join(".local")
+            .join("share")
+            .join("fnm")
+            .join("node-versions"),
         home.join(".asdf").join("installs").join("nodejs"),
     ] {
         if let Some(latest) = latest_version_dir(&base) {
@@ -355,7 +388,9 @@ pub fn find_node() -> Option<PathBuf> {
         }
     }
 
-    candidates.into_iter().find(|candidate| is_executable(candidate))
+    candidates
+        .into_iter()
+        .find(|candidate| is_executable(candidate))
 }
 
 /// Highest version directory below `base` (e.g. `v22.11.0`), so an nvm user gets
@@ -416,7 +451,12 @@ pub fn find_daemon_script(app: &AppHandle) -> (PathBuf, bool) {
     }
     // `cargo test` runs from `src-tauri/`; the build script keeps this path
     // valid for developer builds without hard-coding a machine location.
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("dist").join("daemon.cjs"));
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("dist")
+            .join("daemon.cjs"),
+    );
 
     for candidate in &candidates {
         if candidate.is_file() {

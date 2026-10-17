@@ -21,7 +21,10 @@ const RENDER_SCALE: f32 = 2.0;
 
 pub fn format_tokens(tokens: u64) -> String {
     if tokens >= 999_950_000 {
-        return format!("{}B", trim_trailing_zero(&format!("{:.1}", tokens as f64 / 1_000_000_000.0)));
+        return format!(
+            "{}B",
+            trim_trailing_zero(&format!("{:.1}", tokens as f64 / 1_000_000_000.0))
+        );
     }
     if tokens >= 1_000_000 {
         return format!("{:.1}M", tokens as f64 / 1_000_000.0);
@@ -49,7 +52,9 @@ pub fn format_cost(cost: f64) -> String {
 /// Tray menu summary line, e.g. `今日 1.2M · $3.45`.
 pub fn summary_label(tokens: Option<u64>, cost: Option<f64>) -> String {
     match (tokens, cost) {
-        (Some(tokens), Some(cost)) => format!("今日 {} · {}", format_tokens(tokens), format_cost(cost)),
+        (Some(tokens), Some(cost)) => {
+            format!("今日 {} · {}", format_tokens(tokens), format_cost(cost))
+        }
         (Some(tokens), None) => format!("今日 {}", format_tokens(tokens)),
         _ => "今日 --".to_string(),
     }
@@ -146,10 +151,7 @@ pub fn render_badge(tokens: Option<u64>) -> Option<RgbaImage> {
     let canvas_height = height.ceil() as u32;
     let mut canvas = Canvas::new(canvas_width, canvas_height);
     canvas.fill_rounded_rect(
-        0.0,
-        0.0,
-        canvas_width as f32,
-        canvas_height as f32,
+        [0.0, 0.0, canvas_width as f32, canvas_height as f32],
         6.0 * RENDER_SCALE,
         CHIP_RGB,
         1.0,
@@ -157,7 +159,13 @@ pub fn render_badge(tokens: Option<u64>) -> Option<RgbaImage> {
 
     let glyph_box_x = pad_left;
     let glyph_box_y = (height - glyph_width) / 2.0;
-    draw_pulse(&mut canvas, glyph_box_x, glyph_box_y, glyph_width, 2.0 * RENDER_SCALE);
+    draw_pulse(
+        &mut canvas,
+        glyph_box_x,
+        glyph_box_y,
+        glyph_width,
+        2.0 * RENDER_SCALE,
+    );
 
     if let (Some(font), Some(label)) = (&font, &label) {
         let baseline = (height + font_size * 0.72) / 2.0;
@@ -188,7 +196,14 @@ fn measure(font: &FontRef<'_>, font_size: f32, text: &str) -> f32 {
     width
 }
 
-fn draw_text(canvas: &mut Canvas, font: &FontRef<'_>, font_size: f32, x: f32, baseline: f32, text: &str) {
+fn draw_text(
+    canvas: &mut Canvas,
+    font: &FontRef<'_>,
+    font_size: f32,
+    x: f32,
+    baseline: f32,
+    text: &str,
+) {
     let scaled = font.as_scaled(PxScale::from(font_size));
     let mut pen_x = x;
     let mut previous: Option<ab_glyph::GlyphId> = None;
@@ -197,13 +212,19 @@ fn draw_text(canvas: &mut Canvas, font: &FontRef<'_>, font_size: f32, x: f32, ba
         if let Some(previous) = previous {
             pen_x += scaled.kern(previous, id);
         }
-        let glyph = id.with_scale_and_position(PxScale::from(font_size), ab_glyph::point(pen_x, baseline));
+        let glyph =
+            id.with_scale_and_position(PxScale::from(font_size), ab_glyph::point(pen_x, baseline));
         if let Some(outline) = scaled.outline_glyph(glyph) {
             let bounds = outline.px_bounds();
             let origin_x = bounds.min.x.floor() as i32;
             let origin_y = bounds.min.y.floor() as i32;
             outline.draw(|dx, dy, coverage| {
-                canvas.blend(origin_x + dx as i32, origin_y + dy as i32, TEXT_RGB, coverage);
+                canvas.blend(
+                    origin_x + dx as i32,
+                    origin_y + dy as i32,
+                    TEXT_RGB,
+                    coverage,
+                );
             });
         }
         pen_x += scaled.h_advance(id);
@@ -213,7 +234,14 @@ fn draw_text(canvas: &mut Canvas, font: &FontRef<'_>, font_size: f32, x: f32, ba
 
 /// Classic pulse line: flat, spike up, spike down, flat — scaled into a box.
 fn draw_pulse(canvas: &mut Canvas, x: f32, y: f32, size: f32, thickness: f32) {
-    let points = [(0.0, 0.62), (0.28, 0.62), (0.45, 0.12), (0.63, 0.95), (0.78, 0.62), (1.0, 0.62)];
+    let points = [
+        (0.0, 0.62),
+        (0.28, 0.62),
+        (0.45, 0.12),
+        (0.63, 0.95),
+        (0.78, 0.62),
+        (1.0, 0.62),
+    ];
     let absolute: Vec<(f32, f32)> = points
         .iter()
         .map(|(px, py)| (x + px * size, y + py * size))
@@ -252,16 +280,19 @@ impl Canvas {
         if out_alpha <= 0.0 {
             return;
         }
-        for channel in 0..3 {
-            let source = rgb[channel] as f32;
+        for (channel, source) in rgb.iter().enumerate() {
+            let source = *source as f32;
             let destination = self.data[index + channel] as f32;
-            let out = (source * source_alpha + destination * destination_alpha * (1.0 - source_alpha)) / out_alpha;
+            let out = (source * source_alpha
+                + destination * destination_alpha * (1.0 - source_alpha))
+                / out_alpha;
             self.data[index + channel] = out.round().clamp(0.0, 255.0) as u8;
         }
         self.data[index + 3] = (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
     }
 
-    fn fill_rounded_rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32, rgb: [u8; 3], alpha: f32) {
+    fn fill_rounded_rect(&mut self, rect: [f32; 4], radius: f32, rgb: [u8; 3], alpha: f32) {
+        let [x0, y0, x1, y1] = rect;
         let radius = radius.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0);
         for y in 0..self.height {
             for x in 0..self.width {
@@ -284,12 +315,22 @@ impl Canvas {
     fn stroke_segment(&mut self, from: (f32, f32), to: (f32, f32), thickness: f32, rgb: [u8; 3]) {
         let half = thickness / 2.0;
         let min_x = (from.0.min(to.0) - half).floor().max(0.0) as u32;
-        let max_x = (from.0.max(to.0) + half).ceil().min(self.width as f32).max(0.0) as u32;
+        let max_x = (from.0.max(to.0) + half)
+            .ceil()
+            .min(self.width as f32)
+            .max(0.0) as u32;
         let min_y = (from.1.min(to.1) - half).floor().max(0.0) as u32;
-        let max_y = (from.1.max(to.1) + half).ceil().min(self.height as f32).max(0.0) as u32;
+        let max_y = (from.1.max(to.1) + half)
+            .ceil()
+            .min(self.height as f32)
+            .max(0.0) as u32;
         for y in min_y..max_y {
             for x in min_x..max_x {
-                let coverage = supersample(|px, py| distance_to_segment((px, py), from, to) <= half, x as f32, y as f32);
+                let coverage = supersample(
+                    |px, py| distance_to_segment((px, py), from, to) <= half,
+                    x as f32,
+                    y as f32,
+                );
                 self.blend(x as i32, y as i32, rgb, coverage);
             }
         }
@@ -353,7 +394,10 @@ mod tests {
     #[test]
     fn summary_label_covers_missing_data() {
         assert_eq!(summary_label(None, None), "今日 --");
-        assert_eq!(summary_label(Some(1_200_000), Some(3.45)), "今日 1.2M · $3.45");
+        assert_eq!(
+            summary_label(Some(1_200_000), Some(3.45)),
+            "今日 1.2M · $3.45"
+        );
         assert_eq!(summary_label(Some(500), None), "今日 500");
     }
 

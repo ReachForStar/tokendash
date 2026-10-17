@@ -4,7 +4,9 @@
 //! deliver click events), so the panel is anchored below the top-right corner of
 //! the primary monitor — where the panel's own indicator sits.
 
-use tauri::{AppHandle, Emitter, Manager, LogicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, Position, Size, WebviewUrl, WebviewWindowBuilder,
+};
 
 use crate::daemon::DaemonState;
 
@@ -105,8 +107,12 @@ fn create(app: &AppHandle) -> Result<(), String> {
     // No focus-loss dismissal: the panel stays open until toggled from the tray,
     // matching the macOS behaviour where the NSPanel sets hidesOnDeactivate=false.
     place(app, &window);
-    window.show().map_err(|error| format!("无法显示面板窗口：{error}"))?;
-    window.set_focus().map_err(|error| format!("无法聚焦面板窗口：{error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("无法显示面板窗口：{error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("无法聚焦面板窗口：{error}"))?;
     emit_visibility(app, true);
     Ok(())
 }
@@ -126,7 +132,10 @@ fn place(app: &AppHandle, window: &tauri::WebviewWindow) {
     let x = origin.x + size.width as i32 - width - margin;
     let y = origin.y + offset;
     let _ = window.set_position(Position::Physical(tauri::PhysicalPosition::new(x, y)));
-    let _ = window.set_size(Size::Physical(tauri::PhysicalSize::new(width as u32, height as u32)));
+    let _ = window.set_size(Size::Physical(tauri::PhysicalSize::new(
+        width as u32,
+        height as u32,
+    )));
 }
 
 /// Resizes the panel to its content height while keeping the top edge fixed.
@@ -155,7 +164,8 @@ pub fn request_refresh(app: &AppHandle) {
 /// After a daemon restart on a different port the open panel would keep talking
 /// to a dead origin; reload it against the new one.
 pub fn reload_if_port_changed(app: &AppHandle) {
-    let (Some(window), Some(url)) = (app.get_webview_window(POPOVER_LABEL), popover_url(app)) else {
+    let (Some(window), Some(url)) = (app.get_webview_window(POPOVER_LABEL), popover_url(app))
+    else {
         return;
     };
     if dev_url(app).is_some() {
