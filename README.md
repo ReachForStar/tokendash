@@ -49,6 +49,21 @@ The native menu bar app is the recommended way to use TokenDash.
 
 TokenDash requires **macOS 14 or later**. It runs as a menu-bar-only app, so it does not add an icon to the Dock.
 
+### Ubuntu Desktop App
+
+A native tray app for Linux ships as a `.deb` and an AppImage, built with Tauri 2.
+
+1. Download the latest `TokenDash_..._amd64.deb` (or the AppImage) from [GitHub Releases](https://github.com/zhangferry/tokendash/releases/latest).
+2. Install it:
+
+   ```bash
+   sudo apt install ./TokenDash_*_amd64.deb
+   ```
+
+3. Launch **TokenDash**. It starts the same local dashboard automatically and shows today's token total in the system tray.
+
+The tray uses the AppIndicator API, so GNOME needs the **ubuntu-appindicators** extension (preinstalled on Ubuntu). Because AppIndicator does not deliver icon-click events, open the popover panel from the tray menu's **打开面板** entry rather than by clicking the icon. The app bundles the dashboard server but not Node.js: install Node.js 22 or later (system package, nvm, fnm, or asdf) so the tray can run it.
+
 ### Run the Web Dashboard
 
 On macOS, Linux, or Windows, run the local web dashboard with Node.js 20 or later:
@@ -176,11 +191,13 @@ Common commands:
 | `npm run build` | Build the web client and server |
 | `npm run build:swift` | Build the native macOS app |
 | `npm run build:dmg` | Package the macOS app and DMG |
+| `npm run build:linux` | Package the Ubuntu deb and AppImage |
+| `npm run dev:tauri` | Run the Ubuntu tray app against the dev servers |
 | `npm run typecheck` | Type-check the server and frontend |
 | `npm test` | Run Vitest unit tests |
 | `npm run test:e2e` | Run Playwright end-to-end tests |
 
-The web client uses React, TypeScript, Tailwind CSS, Recharts, and Vite. The local server uses Express and Zod. The macOS app is built with SwiftUI and Sparkle.
+The web client uses React, TypeScript, Tailwind CSS, Recharts, and Vite. The local server uses Express and Zod. The macOS app is built with SwiftUI and Sparkle. The Ubuntu tray app is built with Tauri 2 and reuses the same web client for its popover panel.
 
 ## Contributing
 

@@ -1,0 +1,461 @@
+//! Node daemon lifecycle: identity-checked port discovery, cold start, health
+//! monitoring and shutdown.
+//!
+//! The daemon owns `~/.tokendash/daemon.port` and `~/.tokendash/daemon.pid`.
+//! Those files are only hints: another local service could have taken the port,
+//! so a daemon is trusted only after its HTTP identity (`/api/app-info` package
+//! name) and its dashboard entrypoint both answer.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use serde::Deserialize;
+use tauri::{AppHandle, Manager};
+
+use crate::http::ApiClient;
+use crate::paths;
+
+pub const DEFAULT_PORT: u16 = 3456;
+/// Same scan range the macOS build uses to reattach to a daemon that fell back
+/// from 3456 to a higher port.
+pub const DISCOVERY_PORTS: std::ops::Range<u16> = 3456..3476;
+const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const EXPECTED_PACKAGE_NAME: &str = "@zhangferry-dev/tokendash";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonProbe {
+    Compatible,
+    VersionMismatch,
+    UnavailableOrForeign,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppInfo {
+    package_name: String,
+    version: String,
+}
+
+pub struct DaemonState {
+    port: Mutex<Option<u16>>,
+    child: Mutex<Option<Child>>,
+    error: Mutex<Option<String>>,
+    app_version: String,
+    daemon_script: PathBuf,
+    /// False when the script could not be located at all; the popover reports
+    /// this instead of waiting forever for a daemon that cannot start.
+    script_found: bool,
+    node_path: Option<PathBuf>,
+}
+
+impl DaemonState {
+    pub fn new(app_version: String, daemon_script: PathBuf, script_found: bool, node_path: Option<PathBuf>) -> Self {
+        Self {
+            port: Mutex::new(None),
+            child: Mutex::new(None),
+            error: Mutex::new(None),
+            app_version,
+            daemon_script,
+            script_found,
+            node_path,
+        }
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        *self.port.lock().expect("daemon port lock poisoned")
+    }
+
+    pub fn error(&self) -> Option<String> {
+        self.error.lock().expect("daemon error lock poisoned").clone()
+    }
+
+    fn set_error(&self, message: Option<String>) {
+        *self.error.lock().expect("daemon error lock poisoned") = message;
+    }
+
+    fn set_port(&self, port: Option<u16>) {
+        *self.port.lock().expect("daemon port lock poisoned") = port;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Discovery + start
+// ---------------------------------------------------------------------------
+
+/// Returns a listening daemon port, starting the daemon when none is reachable.
+pub async fn ensure_started(app: &AppHandle) -> Result<u16, String> {
+    let state = app.state::<DaemonState>();
+    if let Some(port) = state.port() {
+        if probe(port, &state.app_version).await == DaemonProbe::Compatible {
+            return Ok(port);
+        }
+        state.set_port(None);
+    }
+
+    if !state.script_found {
+        let message = "未找到内置服务脚本，请重新安装应用。".to_string();
+        state.set_error(Some(message.clone()));
+        return Err(message);
+    }
+
+    // A daemon may already run from a previous app launch or from `npm run dev`.
+    if let Some(port) = read_port_file() {
+        match probe(port, &state.app_version).await {
+            DaemonProbe::Compatible => {
+                state.set_port(Some(port));
+                state.set_error(None);
+                return Ok(port);
+            }
+            DaemonProbe::VersionMismatch => cleanup_incompatible_daemon(),
+            DaemonProbe::UnavailableOrForeign => cleanup_files(),
+        }
+    }
+    if let Some(port) = discover_compatible_port(&state.app_version).await {
+        state.set_port(Some(port));
+        state.set_error(None);
+        let _ = paths::write_number(&paths::port_path(), port as u32);
+        return Ok(port);
+    }
+
+    let Some(node) = state.node_path.clone() else {
+        let message = "未找到 Node.js 22 或更高版本。安装 Node.js 后重新打开 TokenDash。".to_string();
+        state.set_error(Some(message.clone()));
+        return Err(message);
+    };
+
+    cleanup_files();
+    paths::ensure_data_dir().map_err(|error| format!("无法创建数据目录：{error}"))?;
+
+    let mut child = Command::new(&node)
+        .arg(&state.daemon_script)
+        .args(["--port", &DEFAULT_PORT.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("无法启动本地服务：{error}"))?;
+
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Some(port) = read_port_file() {
+            if probe(port, &state.app_version).await == DaemonProbe::Compatible {
+                *state.child.lock().expect("daemon child lock poisoned") = Some(child);
+                state.set_port(Some(port));
+                state.set_error(None);
+                return Ok(port);
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let message = format!("本地服务进程提前退出（退出码 {status}）。");
+                state.set_error(Some(message.clone()));
+                cleanup_files();
+                return Err(message);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let message = format!("无法检查本地服务状态：{error}");
+                state.set_error(Some(message.clone()));
+                return Err(message);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+
+    terminate_child(&mut child);
+    cleanup_files();
+    let message = "本地服务在 15 秒内未就绪。".to_string();
+    state.set_error(Some(message.clone()));
+    Err(message)
+}
+
+/// Cheap liveness check for the health monitor: the process we spawned is
+/// running, or the pid file names a live process.
+pub fn is_alive(app: &AppHandle) -> bool {
+    let state = app.state::<DaemonState>();
+    if let Some(child) = state.child.lock().expect("daemon child lock poisoned").as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return true;
+        }
+    }
+    read_pid_file().map(paths::is_process_alive).unwrap_or(false)
+}
+
+/// Network-level liveness, used where a pid file can lag the real listener.
+pub async fn is_alive_via_probe(app: &AppHandle) -> bool {
+    let state = app.state::<DaemonState>();
+    match state.port() {
+        Some(port) => probe(port, &state.app_version).await == DaemonProbe::Compatible,
+        None => false,
+    }
+}
+
+pub fn stop(app: &AppHandle) {
+    let state = app.state::<DaemonState>();
+    if let Some(mut child) = state.child.lock().expect("daemon child lock poisoned").take() {
+        terminate_child(&mut child);
+    }
+    if let Some(pid) = read_pid_file() {
+        terminate_pid(pid);
+    }
+    state.set_port(None);
+    cleanup_files();
+}
+
+pub async fn probe(port: u16, app_version: &str) -> DaemonProbe {
+    let Ok(client) = ApiClient::new(port, PROBE_TIMEOUT) else {
+        return DaemonProbe::UnavailableOrForeign;
+    };
+    let Ok(info) = client.get_json::<AppInfo>("/api/app-info").await else {
+        return DaemonProbe::UnavailableOrForeign;
+    };
+    if info.package_name != EXPECTED_PACKAGE_NAME {
+        return DaemonProbe::UnavailableOrForeign;
+    }
+    let expected = normalize_version(app_version);
+    if expected != "dev" && normalize_version(&info.version) != expected {
+        return DaemonProbe::VersionMismatch;
+    }
+    // A development API server answers with the same identity but serves no
+    // built web client (the Vite dev server owns `/`), so a debug build adopts
+    // it. A packaged build must own both the API and the dashboard, otherwise
+    // the Dashboard button would land on a 404 from a foreign local service.
+    if cfg!(debug_assertions) || dashboard_available(port).await {
+        DaemonProbe::Compatible
+    } else {
+        DaemonProbe::UnavailableOrForeign
+    }
+}
+
+async fn dashboard_available(port: u16) -> bool {
+    let Ok(client) = ApiClient::new(port, PROBE_TIMEOUT) else {
+        return false;
+    };
+    match client.get_text("/").await {
+        Ok((status, body)) => status == 200 && body.to_ascii_lowercase().contains("<html"),
+        Err(_) => false,
+    }
+}
+
+async fn discover_compatible_port(app_version: &str) -> Option<u16> {
+    for port in DISCOVERY_PORTS {
+        if probe(port, app_version).await == DaemonProbe::Compatible {
+            return Some(port);
+        }
+    }
+    None
+}
+
+fn normalize_version(version: &str) -> String {
+    version.trim().trim_start_matches('v').to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+fn read_port_file() -> Option<u16> {
+    paths::read_number(&paths::port_path()).and_then(|port| u16::try_from(port).ok())
+}
+
+fn read_pid_file() -> Option<u32> {
+    paths::read_number(&paths::pid_path())
+}
+
+fn cleanup_files() {
+    let _ = fs::remove_file(paths::pid_path());
+    let _ = fs::remove_file(paths::port_path());
+}
+
+/// A stale pid may already belong to an unrelated process. Only signal it when
+/// both the API identity and the process command line point at TokenDash.
+fn cleanup_incompatible_daemon() {
+    if let Some(pid) = read_pid_file() {
+        if paths::is_process_alive(pid) && is_tokendash_daemon_process(pid) {
+            terminate_pid(pid);
+        }
+    }
+    cleanup_files();
+}
+
+fn is_tokendash_daemon_process(pid: u32) -> bool {
+    let Ok(output) = Command::new("ps").args(["-p", &pid.to_string(), "-o", "command="]).output() else {
+        return false;
+    };
+    let command = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    command.contains("daemon.cjs")
+}
+
+fn terminate_child(child: &mut Child) {
+    let _ = Command::new("kill").args(["-TERM", &child.id().to_string()]).status();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+}
+
+fn terminate_pid(pid: u32) {
+    let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if !paths::is_process_alive(pid) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+}
+
+// ---------------------------------------------------------------------------
+// Executable + script resolution
+// ---------------------------------------------------------------------------
+
+/// Locates the Node.js binary. A GUI launch inherits a minimal `PATH`, so the
+/// version managers are scanned directly instead of relying on the shell.
+pub fn find_node() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("TOKENDASH_NODE") {
+        let candidate = PathBuf::from(path);
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    let home = paths::home_dir();
+    let mut candidates: Vec<PathBuf> = vec![
+        PathBuf::from("/usr/local/bin/node"),
+        PathBuf::from("/usr/bin/node"),
+        PathBuf::from("/snap/bin/node"),
+        home.join(".local/bin/node"),
+        home.join(".volta/bin/node"),
+        home.join("bin/node"),
+    ];
+
+    for base in [
+        home.join(".nvm").join("versions").join("node"),
+        home.join(".local").join("share").join("fnm").join("node-versions"),
+        home.join(".asdf").join("installs").join("nodejs"),
+    ] {
+        if let Some(latest) = latest_version_dir(&base) {
+            candidates.push(latest.join("bin").join("node"));
+            candidates.push(latest.join("installation").join("bin").join("node"));
+        }
+    }
+
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            candidates.push(directory.join("node"));
+        }
+    }
+
+    candidates.into_iter().find(|candidate| is_executable(candidate))
+}
+
+/// Highest version directory below `base` (e.g. `v22.11.0`), so an nvm user gets
+/// the newest installed runtime instead of an arbitrary one.
+fn latest_version_dir(base: &Path) -> Option<PathBuf> {
+    let mut entries: Vec<(Vec<u64>, PathBuf)> = fs::read_dir(base)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            (numeric_parts(&name), entry.path())
+        })
+        .collect();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries.pop().map(|(_, path)| path)
+}
+
+fn numeric_parts(name: &str) -> Vec<u64> {
+    name.split(|character: char| !character.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
+/// Resolves `dist/daemon.cjs`: bundled resources in a packaged build, the repo
+/// `dist/` directory when running from a source checkout.
+pub fn find_daemon_script(app: &AppHandle) -> (PathBuf, bool) {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let packaged = resource_dir.join("server").join("dist").join("daemon.cjs");
+        if packaged.is_file() {
+            return (packaged, true);
+        }
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(executable) = std::env::current_exe() {
+        let mut directory = executable.parent().map(Path::to_path_buf);
+        // Walk up from target/debug (or target/release) towards the repo root.
+        for _ in 0..6 {
+            let Some(current) = directory else { break };
+            candidates.push(current.join("dist").join("daemon.cjs"));
+            directory = current.parent().map(Path::to_path_buf);
+        }
+    }
+    // `cargo test` runs from `src-tauri/`; the build script keeps this path
+    // valid for developer builds without hard-coding a machine location.
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("dist").join("daemon.cjs"));
+
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return (canonicalize_lossy(candidate), true);
+        }
+    }
+    (
+        candidates
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| PathBuf::from("dist/daemon.cjs")),
+        false,
+    )
+}
+
+fn canonicalize_lossy(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_normalization_ignores_the_v_prefix() {
+        assert_eq!(normalize_version("v1.9.1"), "1.9.1");
+        assert_eq!(normalize_version(" 1.9.1 "), "1.9.1");
+    }
+
+    #[test]
+    fn numeric_parts_orders_versions() {
+        assert_eq!(numeric_parts("v22.11.0"), vec![22, 11, 0]);
+        assert_eq!(numeric_parts("v9.0.0"), vec![9, 0, 0]);
+        assert!(numeric_parts("v22.11.0") > numeric_parts("v9.0.0"));
+    }
+
+    #[test]
+    fn discovery_range_matches_the_macos_build() {
+        assert_eq!(DISCOVERY_PORTS.start, 3456);
+        assert_eq!(DISCOVERY_PORTS.end, 3476);
+    }
+}

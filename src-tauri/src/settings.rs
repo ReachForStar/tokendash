@@ -1,0 +1,171 @@
+//! Desktop-only preferences. Kept in the daemon's data directory so one file
+//! describes the whole desktop experience and survives reinstalls.
+
+use std::fs;
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use crate::paths;
+
+/// Cadences mirror the macOS `RefreshInterval` cases so both platform builds
+/// offer the same choices.
+pub const REFRESH_CHOICES_SECS: [u64; 3] = [600, 1_800, 3_600];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DesktopSettings {
+    /// Background detail warm-up cadence while the popover is closed (seconds).
+    pub background_refresh_secs: u64,
+    /// `system` | `light` | `dark`
+    pub appearance: String,
+    /// `1d` | `3h` | `15m`
+    pub hourly_range: String,
+    pub launch_at_login: bool,
+    pub low_quota_notifications: bool,
+    pub low_quota_threshold_percent: u32,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self {
+            background_refresh_secs: 3_600,
+            appearance: "system".to_string(),
+            hourly_range: "1d".to_string(),
+            launch_at_login: false,
+            low_quota_notifications: true,
+            low_quota_threshold_percent: 80,
+        }
+    }
+}
+
+impl DesktopSettings {
+    /// Clamps every field to a value the app can act on. Settings arrive from
+    /// the webview, so nothing is trusted as-is.
+    pub fn normalized(mut self) -> Self {
+        if !REFRESH_CHOICES_SECS.contains(&self.background_refresh_secs) {
+            self.background_refresh_secs = DesktopSettings::default().background_refresh_secs;
+        }
+        if !["system", "light", "dark"].contains(&self.appearance.as_str()) {
+            self.appearance = "system".to_string();
+        }
+        if !["1d", "3h", "15m"].contains(&self.hourly_range.as_str()) {
+            self.hourly_range = "1d".to_string();
+        }
+        self.low_quota_threshold_percent = self.low_quota_threshold_percent.clamp(1, 100);
+        self
+    }
+}
+
+pub fn load() -> DesktopSettings {
+    let Ok(raw) = fs::read_to_string(paths::settings_path()) else {
+        return DesktopSettings::default();
+    };
+    serde_json::from_str::<DesktopSettings>(&raw)
+        .map(DesktopSettings::normalized)
+        .unwrap_or_default()
+}
+
+pub fn save(settings: &DesktopSettings) -> Result<DesktopSettings, String> {
+    let normalized = settings.clone().normalized();
+    paths::ensure_data_dir().map_err(|error| format!("无法创建数据目录：{error}"))?;
+    let serialized = serde_json::to_string_pretty(&normalized)
+        .map_err(|error| format!("无法序列化设置：{error}"))?;
+    fs::write(paths::settings_path(), format!("{serialized}\n"))
+        .map_err(|error| format!("无法写入设置文件：{error}"))?;
+    Ok(normalized)
+}
+
+// ---------------------------------------------------------------------------
+// Launch at login (XDG autostart)
+// ---------------------------------------------------------------------------
+
+fn autostart_path() -> PathBuf {
+    paths::home_dir()
+        .join(".config")
+        .join("autostart")
+        .join("tokendash.desktop")
+}
+
+/// The executable to relaunch. AppImages run from a temporary mount, so the
+/// original `$APPIMAGE` path has to win over the process path.
+pub fn launch_exec() -> String {
+    if let Some(appimage) = std::env::var_os("APPIMAGE") {
+        return appimage.to_string_lossy().into_owned();
+    }
+    std::env::current_exe()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "tokendash-desktop".to_string())
+}
+
+pub fn apply_autostart(enabled: bool) -> Result<(), String> {
+    let path = autostart_path();
+    if enabled {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| format!("无法创建自启目录：{error}"))?;
+        }
+        let entry = format!(
+            "[Desktop Entry]\n\
+             Type=Application\n\
+             Name=TokenDash\n\
+             Comment=AI coding token usage in the system tray\n\
+             Exec={}\n\
+             Terminal=false\n\
+             X-GNOME-Autostart-enabled=true\n",
+            launch_exec()
+        );
+        fs::write(&path, entry).map_err(|error| format!("无法写入自启文件：{error}"))?;
+        return Ok(());
+    }
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("无法删除自启文件：{error}")),
+    }
+}
+
+pub fn is_autostart_enabled() -> bool {
+    autostart_path().exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalization_rejects_unknown_choices() {
+        let settings = DesktopSettings {
+            background_refresh_secs: 7,
+            appearance: "neon".to_string(),
+            hourly_range: "99h".to_string(),
+            launch_at_login: true,
+            low_quota_notifications: false,
+            low_quota_threshold_percent: 0,
+        }
+        .normalized();
+
+        assert_eq!(settings.background_refresh_secs, 3_600);
+        assert_eq!(settings.appearance, "system");
+        assert_eq!(settings.hourly_range, "1d");
+        assert_eq!(settings.low_quota_threshold_percent, 1);
+        assert!(settings.launch_at_login);
+    }
+
+    #[test]
+    fn defaults_match_the_macos_build() {
+        let defaults = DesktopSettings::default();
+        assert_eq!(defaults.background_refresh_secs, 3_600);
+        assert_eq!(defaults.hourly_range, "1d");
+        assert!(defaults.low_quota_notifications);
+        assert_eq!(defaults.low_quota_threshold_percent, 80);
+        assert!(!defaults.launch_at_login);
+    }
+
+    #[test]
+    fn unknown_fields_fall_back_per_field() {
+        let parsed: DesktopSettings =
+            serde_json::from_str(r#"{"appearance":"dark"}"#).expect("partial settings parse");
+        assert_eq!(parsed.appearance, "dark");
+        assert_eq!(parsed.background_refresh_secs, 3_600);
+    }
+}
