@@ -18,7 +18,9 @@ ARCH=$(uname -m)
 DMG="release/TokenDash-$VERSION-$ARCH.dmg"
 APPCAST="release/appcast.xml"
 REGISTRY="https://registry.npmjs.org"
-REPO="zhangferry/tokendash"
+REPO="ReachForStar/tokendash"
+# Git remote that hosts REPO; release checks and pushes use it, not a fixed origin.
+GIT_REMOTE="${GIT_REMOTE:-origin}"
 DEFAULT_SPARKLE_PRIVATE_KEY_FILE="$HOME/.tokendash/eddsa_priv.key"
 DEFAULT_SPARKLE_PUBLIC_KEY_FILE="$HOME/.tokendash/eddsa_pub.key"
 
@@ -63,7 +65,7 @@ fi
 if git rev-parse "$TAG" >/dev/null 2>&1; then
     fail "local tag $TAG already exists"
 fi
-if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+if git ls-remote --exit-code --tags "$GIT_REMOTE" "refs/tags/$TAG" >/dev/null 2>&1; then
     fail "remote tag $TAG already exists"
 fi
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
@@ -74,9 +76,9 @@ fi
 if ! $DRY_RUN; then
     [ "$(git branch --show-current)" = "main" ] || fail "deploy must run from main"
     [ -z "$(git status --porcelain)" ] || fail "deploy requires a clean working tree"
-    git fetch origin main --quiet
-    [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] \
-        || fail "local main must exactly match origin/main"
+    git fetch "$GIT_REMOTE" main --quiet
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse "$GIT_REMOTE/main")" ] \
+        || fail "local main must exactly match $GIT_REMOTE/main"
 fi
 
 step "Running release verification"
@@ -155,8 +157,8 @@ fi
 
 step "Publishing git tag and GitHub Release"
 git tag -a "$TAG" -m "Release $TAG"
-git push origin main
-git push origin "$TAG"
+git push "$GIT_REMOTE" main
+git push "$GIT_REMOTE" "$TAG"
 gh release edit "$TAG" --repo "$REPO" --draft=false --latest
 
 if [ "${TRUSTED_PUBLISHING:-0}" = "1" ]; then
