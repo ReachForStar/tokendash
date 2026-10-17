@@ -37,8 +37,11 @@ jobs:
 
       - name: Resolve release tag
         id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          PUSH_REF: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${INPUT_TAG:-$PUSH_REF}"
           VERSION="${TAG#v}"
           PKG_VERSION=$(node -p "require('./package.json').version")
           if [ "$VERSION" != "$PKG_VERSION" ]; then
