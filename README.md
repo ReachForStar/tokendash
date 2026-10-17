@@ -62,7 +62,9 @@ A native tray app for Linux ships as a `.deb` and an AppImage, built with Tauri 
 
 3. Launch **TokenDash**. It starts the same local dashboard automatically and shows today's token total in the system tray.
 
-The tray uses the AppIndicator API, so GNOME needs the **ubuntu-appindicators** extension (preinstalled on Ubuntu). Because AppIndicator does not deliver icon-click events, open the popover panel from the tray menu's **打开面板** entry rather than by clicking the icon. The app bundles the dashboard server but not Node.js: install Node.js 22 or later (system package, nvm, fnm, or asdf) so the tray can run it.
+The tray uses the AppIndicator API, so GNOME needs the **ubuntu-appindicators** extension (preinstalled on Ubuntu). Because AppIndicator does not deliver icon-click events, open the popover panel from the tray menu (right-click the icon, then **打开面板**). The app bundles the dashboard server but not Node.js: install Node.js 22 or later (system package, nvm, fnm, or asdf) so the tray can run it.
+
+The popover panel mirrors the macOS menu bar app: today's tokens, cost, and cache rate; an hourly activity chart with 1D/3H/15M ranges; model and token-type usage; the seven-day trend; and coding-plan quota status. The panel is borderless and frameless — drag it by its header to move it, and it stays open until you dismiss it from the tray menu or press Escape. Panel settings (launch at login, background refresh interval, appearance, low-quota alerts, and API credentials) live under the panel's **Settings** entry and are shared with the tray process.
 
 ### Run the Web Dashboard
 
@@ -159,6 +161,7 @@ tokendash [options]
 
 --port <number>  Port for the local server (default: 3456 or PORT)
 --no-open        Start without opening a browser
+--tray           Launch the macOS menu bar app instead of opening a browser
 --version, -v    Print the installed version
 ```
 
@@ -170,7 +173,7 @@ TokenDash consists of three small layers:
 
 1. **Local parsers** read each supported tool's session files or database.
 2. **An Express API** validates and caches normalized usage data.
-3. **Two interfaces** present the same data: a React analytics dashboard and a native SwiftUI macOS menu bar app.
+3. **Three interfaces** present the same data: a React analytics dashboard, a native SwiftUI macOS menu bar app, and a Tauri 2 tray app for Ubuntu that reuses the dashboard's web client for its popover panel.
 
 Data is cached locally with a stale-while-revalidate strategy so the interface remains responsive while files are being reparsed.
 
@@ -209,6 +212,15 @@ Before submitting a change, run:
 npm run typecheck
 npm test
 npm run test:e2e
+```
+
+If you touched the Ubuntu tray app under `src-tauri/`, also run the Rust gates the CI enforces:
+
+```bash
+cd src-tauri
+cargo fmt --check
+cargo clippy --release -- -D warnings
+cargo test --release
 ```
 
 ## License
